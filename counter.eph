@@ -1,0 +1,7 @@
+extern "env" {
+    fn print_i32(x: I32) -> ()
+    fn print_string(s: String) -> ()
+}
+
+fn run_counter(count: I32) -> I32 =
+    count + 1
