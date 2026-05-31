@@ -28,5 +28,5 @@ zig build
 == Status
 
 * *Milestone 1:* Local Baton Cycle (Completed)
-* *Milestone 2:* Elixir Mesh Orchestration (Planned)
+* *Milestone 2:* Elixir Mesh Orchestration (Completed)
 * *Milestone 3:* Verified ABI (Planned)
