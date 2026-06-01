@@ -1,0 +1,125 @@
+// SPDX-License-Identifier: PMPL-1.0-or-later
+= Bag-of-Actions — EXPLAINME
+:toc: preamble
+:toc-title: Contents
+:icons: font
+
+This file provides implementation receipts and formal evidence for the 
+claims made in README.adoc. It is intended for developers auditing the 
+integrity of the continuation mesh.
+
+== Claim-to-implementation map
+
+=== Linear Baton Logic
+
+[quote, README.adoc]
+____
+Powered by Ephapax, ensuring one-time consumption of resources.
+____
+
+How this is implemented::
+The Baton is modeled as a linear resource in **Ephapax**. In the current POC, 
+linearity is enforced by the **Elixir Orchestrator** which ensures a Baton 
+is only "claimed" by one process at a time via GenServer casts. 
+The underlying Wasm logic in `counter.wat` represents the atomic 
+transition step.
+
+Code Paths::
+* link:counter.wat[] — Wasm logic for the atomic transition.
+* link:bag/lib/bag/baton.ex[] — Elixir struct representing the Baton.
+
+Caveat::
+Full language-level linearity (Ephapax `let!`) is validated during 
+compilation but Milestone 2 relies on Elixir process isolation for 
+runtime non-duplication.
+
+=== Mobile Wasm Contexts
+
+[quote, README.adoc]
+____
+Native state capture of WebAssembly modules for seamless migration.
+____
+
+How this is implemented::
+The **Zig Execution Host** manages the Wasm lifecycle. It captures 
+the result of a Wasm execution (currently via function return values 
+and CLI output) and serializes it into the persistent Baton store 
+(`baton.txt`). 
+
+Code Paths::
+* link:src/main.zig[] — Zig host logic for Wasm invocation and state capture.
+* link:bag/lib/bag/executor.ex[] — Elixir bridge that invokes the Zig runner.
+
+Caveat::
+Milestone 1/2 uses function arguments for state. Full linear memory 
+snapshotting (dumping the `memory` section) is planned for Milestone 3.
+
+=== Distributed Fault Tolerance
+
+[quote, README.adoc]
+____
+Built on Elixir/OTP, leveraging the BEAM for robust node discovery.
+____
+
+How this is implemented::
+We use Erlang's **`:pg` (Process Groups)** to form a decentralized 
+cluster. Any node that joins the `:bag_mesh` group can receive and 
+process Batons. The Elixir supervision tree ensures that if an 
+executor fails, the orchestrator remains alive to re-route work.
+
+Code Paths::
+* link:bag/lib/bag/mesh.ex[] — GenServer implementing the distributed registry.
+* link:bag/lib/bag/application.ex[] — Supervision tree definition.
+
+Caveat::
+The current POC uses a random-walk routing strategy. Sophisticated 
+capability-based matching (e.g. "Run this on a node with a GPU") 
+is part of the Milestone 3 specification.
+
+== Dogfooded Across The Account
+
+[cols="1,2,2", options="header"]
+|===
+| Technology / Pattern | Used here | Also used in
+
+| **Ephapax**
+| Core logic language for Baton continuations.
+| link:https://github.com/hyperpolymath/ephapax[ephapax]
+
+| **Zig Host**
+| Minimal high-performance wrapper for Wasmtime execution.
+| link:https://github.com/hyperpolymath/boj-server[boj-server]
+
+| **RSR Template**
+| Foundation for high-integrity repo structure and documentation.
+| link:https://github.com/hyperpolymath/rsr-template-repo[rsr-template-repo]
+|===
+
+== Known gaps
+
+[CAUTION]
+====
+**Linear Memory Dumps**: README claims "Mobile Wasm Contexts" but current 
+implementation only transfers the `counter` integer. True memory snapshotting 
+is tracked in Issue #3.
+====
+
+[CAUTION]
+====
+**Formal ABI**: The verified handoff protocol is planned for Milestone 3. 
+Currently, the "Pass" logic is implemented in Elixir without formal 
+Idris 2 proofs.
+====
+
+== Evidence index
+
+[cols="2,3", options="header"]
+|===
+| Path | Proves
+
+| `baton.txt`
+| Persistent state exists and survives between independent Zig/Wasm runs.
+
+| `bag/lib/bag/mesh.ex`
+| Process group members are tracked and work is delegated distributedly.
+|===

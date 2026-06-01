@@ -1,32 +1,104 @@
+// SPDX-License-Identifier: PMPL-1.0-or-later
 = Bag-of-Actions
-:toc:
-:toclevels: 3
+:toc: preamble
+:toc-title: Contents
 :icons: font
 
-Capability-aware, resumable, distributed continuation runtime based on Elixir, Ephapax, and Zig.
+image:https://img.shields.io/badge/OpenSSF-Best_Practices-green?logo=opensourcesecurity[OpenSSF Best Practices,link="https://www.bestpractices.dev/en/projects/new?repo_url=https://github.com/hyperpolymath/bag-of-actions"]
+image:https://img.shields.io/badge/License-PMPL--1.0-blue.svg[License: PMPL-1.0,link="https://github.com/hyperpolymath/palimpsest-license"]
+image:https://api.thegreenwebfoundation.org/greencheckimage/github.com[Green Web,link="https://www.thegreenwebfoundation.org/green-web-check/?url=github.com"]
+image:https://img.shields.io/badge/Elixir-1.14+-4B275F?logo=elixir[Elixir,link="https://elixir-lang.org/"]
+image:https://img.shields.io/badge/Zig-0.15+-F7A41D?logo=zig[Zig,link="https://ziglang.org/"]
+image:https://img.shields.io/badge/Ephapax-Core-blue[Ephapax,link="https://github.com/hyperpolymath/ephapax"]
 
-== Vision
+*Capability-Aware Continuation Mesh*
 
-Bag-of-Actions is not merely a workflow engine. It is a capability-aware, resumable, distributed continuation runtime that allows work to move dynamically between different execution environments depending on circumstances.
+_Mobile work that follows resources, not static DAGs._
 
-== Architecture
+== What is Bag-of-Actions?
 
-* *Orchestrator:* Elixir/OTP
-* *Workload Logic:* Ephapax (Linear Types)
-* *Execution Host:* Zig (Wasm-based)
-* *Formal Auditor:* Idris 2
+Bag-of-Actions is a *distributed operating system for mobile continuations*. 
+Unlike traditional workflow engines that push tasks to static queues, 
+Bag-of-Actions represents units of work as **Batons**—serialized execution 
+states that search for environments matching their required capabilities.
 
-== Getting Started
+* *Resource Safety* — Linear types ensure work is never lost or duplicated.
+* *Resumable execution* — Pause execution on one node, resume on another.
+* *Capability Routing* — Dynamic dispatch based on hardware, identity, and trust.
+* *Polylingual Mesh* — Orchestrated by Elixir, executed by Zig, proven by Idris.
+
+== Implementation status
+
+[cols="1,1,2", options="header"]
+|===
+| Milestone | Status | Capability
+
+| 1. Local Baton Cycle
+| ✓ Complete
+| Zig-hosted Wasm "Freeze/Thaw" state cycle.
+
+| 2. Elixir Mesh
+| ✓ Complete
+| Distributed orchestration and Baton handoffs via process groups.
+
+| 3. Verified ABI
+| [Planned]
+| Idris 2 formal proofs for linear resource preservation.
+|===
+
+== Features
+
+* *Linear Baton Logic* — Powered by **Ephapax**, ensuring one-time consumption of resources (tokens, memory, credits).
+* *Mobile Wasm Contexts* — Native state capture of WebAssembly modules for seamless migration.
+* *Distributed Fault Tolerance* — Built on **Elixir/OTP**, leveraging the BEAM for robust node discovery and supervision.
+* *Trust Attestation* — Cryptographic proof-chain for every state transition (Milestone 3).
+
+== Quick start
 
 [source,bash]
 ----
+# Build the Zig host
 zig build
+
+# Initialize a new Baton starting at counter 0
 ./zig-out/bin/bag_of_actions init
-./zig-out/bin/bag_of_actions run
+
+# Run the Elixir orchestrator
+# This will trigger a recursive 10-step distributed handoff demo
+cd bag
+mix compile
+elixir --sname mesh1 --cookie bag_secret -S mix run -e "Bag.Mesh.submit(0); :timer.sleep(15000)"
 ----
 
-== Status
+Wondering how this works? See link:EXPLAINME.adoc[].
 
-* *Milestone 1:* Local Baton Cycle (Completed)
-* *Milestone 2:* Elixir Mesh Orchestration (Completed)
-* *Milestone 3:* Verified ABI (Planned)
+== Repository layout
+
+[cols="1,3"]
+|===
+| Path | Purpose
+
+| `src/`
+| Zig source code for the Execution Host (Baton supervisor).
+
+| `bag/`
+| Elixir source code for the Mesh Orchestrator (Control Plane).
+
+| `counter.wat`
+| Minimal Wasm logic module used in the state transition POC.
+
+| `baton.txt`
+| Persistent serialization format for the Milestone 1/2 Baton.
+|===
+
+== Documentation
+
+* link:EXPLAINME.adoc[EXPLAINME.adoc] — Implementation receipts and evidence index.
+* link:CONTRIBUTING.md[CONTRIBUTING.md] — How to add new capability matchers.
+* link:SECURITY.md[SECURITY.md] — Attestation and secret handling protocols.
+
+== License
+
+Distributed under the link:LICENSE[Palimpsest License (PMPL-1.0)].
+
+_The future of work is mobile._
