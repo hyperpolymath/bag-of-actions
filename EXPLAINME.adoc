@@ -102,6 +102,30 @@ Current implementation uses the `guix` CLI. Future versions will move
 to a direct Guix-Daemon socket interface for improved isolation and 
 performance.
 
+=== Formal Estate Manifest
+
+[quote, README.adoc]
+____
+Verified mapping of infrastructure capabilities to physical nodes.
+____
+
+How this is implemented::
+The **Estate Manifest** is defined in **Idris 2** as a static, verified 
+registry of nodes and their capabilities. This allows the system 
+to perform "Capability Algebra" at compile-time or run-time to 
+ensure that a Baton's requirements (e.g. `[GPU, Guix]`) are 
+physically satisfiable by at least one node in the mesh before 
+a handoff is even attempted.
+
+Code Paths::
+* link:verification/proofs/Bag/Estate.idr[] — Formal node registry.
+* link:nodes.scm[] — Guix-native mirror of the estate configuration.
+
+Caveat::
+Current registry is static. Future work will include dynamic node 
+attestation (via a "Hello" handshake) to update the manifest 
+in real-time as nodes join the mesh.
+
 == Dogfooded Across The Account
 
 [cols="1,2,2", options="header"]
