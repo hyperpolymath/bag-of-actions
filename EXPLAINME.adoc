@@ -64,19 +64,16 @@ ____
 
 How this is implemented::
 The system boundary is governed by a **Verified ABI** defined in **Idris 2**. 
-It formally models the Baton as a linear resource and proves that 
-handoffs only occur when a target node satisfies the Baton's capability 
-requirements. The Idris 2 code produces witnesses of valid handoffs 
-that serve as the formal specification for the Elixir routing logic.
+Routing decisions in the Elixir mesh are no longer random; they are 
+bridged to the **Zig Execution Host** which implements the formal 
+`Bag.Estate` capability matcher (hand-translated from the Idris 2 spec). 
+Every Baton handoff is verified against the target node's hardware and 
+trust traits before migration.
 
 Code Paths::
-* link:verification/proofs/Bag/Protocol.idr[] — Capability algebra.
-* link:verification/proofs/Bag/Handoff.idr[] — Verified transition logic.
-
-Caveat::
-While the handoff is formally proven in Idris 2, the current Elixir 
-implementation mirrors this logic but is not yet dynamically linked 
-to the Idris 2 binary.
+* link:verification/proofs/Bag/Protocol.idr[] — Formal capability algebra.
+* link:src/estate.zig[] — Zig implementation of the formal matcher.
+* link:bag/lib/bag/mesh.ex[] — Elixir routing logic using the verified bridge.
 
 === Guix-Powered Builds
 

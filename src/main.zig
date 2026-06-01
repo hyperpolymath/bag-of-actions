@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
 const std = @import("std");
+const estate = @import("estate.zig");
 
 pub const Baton = struct {
     counter: i32,
     module_cid: []const u8,
     guix_package: ?[]const u8 = null,
+    required_cap: ?[]const u8 = null,
 
     pub fn save(self: Baton, allocator: std.mem.Allocator, path: []const u8) !void {
         const file = try std.fs.cwd().createFile(path, .{});
         defer file.close();
         const pkg = self.guix_package orelse "none";
-        const msg = try std.fmt.allocPrint(allocator, "{d}\n{s}\n{s}\n", .{ self.counter, self.module_cid, pkg });
+        const cap = self.required_cap orelse "none";
+        const msg = try std.fmt.allocPrint(allocator, "{d}\n{s}\n{s}\n{s}\n", .{ self.counter, self.module_cid, pkg, cap });
         defer allocator.free(msg);
         try file.writeAll(msg);
     }
@@ -26,11 +29,13 @@ pub const Baton = struct {
         const count_line = it.next() orelse return error.InvalidFormat;
         const cid_line = it.next() orelse return error.InvalidFormat;
         const pkg_line = it.next() orelse return error.InvalidFormat;
+        const cap_line = it.next() orelse return error.InvalidFormat;
 
         return Baton{
             .counter = try std.fmt.parseInt(i32, count_line, 10),
             .module_cid = try allocator.dupe(u8, cid_line),
             .guix_package = if (std.mem.eql(u8, pkg_line, "none")) null else try allocator.dupe(u8, pkg_line),
+            .required_cap = if (std.mem.eql(u8, cap_line, "none")) null else try allocator.dupe(u8, cap_line),
         };
     }
 };
@@ -63,18 +68,44 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 2) {
-        std.debug.print("Usage: {s} [init|run]\n", .{args[0]});
+        std.debug.print("Usage: {s} [init|run|match]\n", .{args[0]});
         return;
     }
 
     if (std.mem.eql(u8, args[1], "init")) {
-        const baton = Baton{ .counter = 0, .module_cid = "counter.wat", .guix_package = "hello" };
+        const baton = Baton{ .counter = 0, .module_cid = "counter.wat", .guix_package = "hello", .required_cap = "guix" };
         try baton.save(allocator, "baton.txt");
         std.debug.print("Initialized baton.txt with Guix target 'hello'\n", .{});
+    } else if (std.mem.eql(u8, args[1], "match")) {
+        if (args.len < 3) {
+            std.debug.print("Usage: {s} match <node_name> [required_caps...]\n", .{args[0]});
+            return;
+        }
+        const node_name = args[2];
+        const req_count = args.len - 3;
+        const reqs = try allocator.alloc(estate.Capability, req_count);
+        defer allocator.free(reqs);
+
+        var valid_count: usize = 0;
+        for (args[3..]) |cap_str| {
+            if (estate.Capability.fromString(cap_str)) |cap| {
+                reqs[valid_count] = cap;
+                valid_count += 1;
+            }
+        }
+
+        if (estate.nodeSatisfies(node_name, reqs[0..valid_count])) {
+            std.debug.print("MATCH: TRUE\n", .{});
+            std.process.exit(0);
+        } else {
+            std.debug.print("MATCH: FALSE\n", .{});
+            std.process.exit(1);
+        }
     } else if (std.mem.eql(u8, args[1], "run")) {
         var baton = try Baton.load(allocator, "baton.txt");
         defer allocator.free(baton.module_cid);
         defer if (baton.guix_package) |pkg| allocator.free(pkg);
+        defer if (baton.required_cap) |cap| allocator.free(cap);
         
         std.debug.print("Resuming Baton [Counter: {d}, Module: {s}]\n", .{baton.counter, baton.module_cid});
 

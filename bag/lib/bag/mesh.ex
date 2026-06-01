@@ -16,25 +16,48 @@ defmodule Bag.Mesh do
   @doc """
   Submits a new Baton to the Mesh.
   """
-  def submit(counter \\ 0, guix_package \\ "hello") do
-    baton = Baton.new(counter, "counter.wat", guix_package)
+  def submit(counter \\ 0, guix_package \\ "hello", required_cap \\ [:guix]) do
+    baton = Baton.new(counter, "counter.wat", guix_package, required_cap)
     route_baton(baton)
     baton.id
   end
 
   defp route_baton(baton) do
-    # Pick a random node/process in the group
+    # 1. Get all members in the mesh
     members = :pg.get_members(:bag_mesh)
-    IO.puts("Mesh: Active members in :bag_mesh: #{inspect(members)}")
-    IO.puts("Mesh: Cluster nodes: #{inspect([Node.self() | Node.list()])}")
     
-    if members != [] do
-      target = Enum.random(members)
-      IO.puts("Mesh: Routing Baton to target: #{inspect(target)}")
+    # 2. Filter members based on their node name and the Baton's requirements
+    # For this POC, we assume the node name is the Elixir sname (e.g. mesh-laptop)
+    # In a production system, this would be an attested identity.
+    valid_targets = Enum.filter(members, fn pid ->
+      node_name = node_to_name(node(pid))
+      # Translate requiredCap to string list for the Zig bridge
+      req_strings = Enum.map(baton.required_cap || [], fn 
+        :guix -> "guix"
+        :linux -> "linux"
+        :macos -> "macos"
+        :gpu -> "gpu"
+        :trusted_host -> "trusted_host"
+        _ -> "unknown"
+      end)
+      
+      Executor.node_satisfies?(node_name, req_strings)
+    end)
+
+    IO.puts("Mesh: Routing Baton #{baton.id} [Requirements: #{inspect(baton.required_cap)}]")
+    IO.puts("Mesh: Valid targets found: #{inspect(valid_targets)}")
+    
+    if valid_targets != [] do
+      target = Enum.random(valid_targets)
+      IO.puts("Mesh: Routing to verified node: #{inspect(target)}")
       GenServer.cast(target, {:process, baton})
     else
-      IO.puts("Mesh: No active nodes found. Dropping Baton.")
+      IO.puts("Mesh: NO CAPABLE NODES FOUND for Baton #{baton.id}. Work suspended.")
     end
+  end
+
+  defp node_to_name(node_atom) do
+    node_atom |> to_string() |> String.split("@") |> List.first()
   end
 
   # Callbacks
