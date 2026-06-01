@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
 defmodule Bag.Mesh do
   @moduledoc """
   The distributed orchestrator for Batons.
@@ -14,8 +16,8 @@ defmodule Bag.Mesh do
   @doc """
   Submits a new Baton to the Mesh.
   """
-  def submit(counter \\ 0) do
-    baton = Baton.new(counter)
+  def submit(counter \\ 0, guix_package \\ "hello") do
+    baton = Baton.new(counter, "counter.wat", guix_package)
     route_baton(baton)
     baton.id
   end

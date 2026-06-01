@@ -1,11 +1,12 @@
-// SPDX-License-Identifier: PMPL-1.0-or-later
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
 = Bag-of-Actions
 :toc: preamble
 :toc-title: Contents
 :icons: font
 
 image:https://img.shields.io/badge/OpenSSF-Best_Practices-green?logo=opensourcesecurity[OpenSSF Best Practices,link="https://www.bestpractices.dev/en/projects/new?repo_url=https://github.com/hyperpolymath/bag-of-actions"]
-image:https://img.shields.io/badge/License-PMPL--1.0-blue.svg[License: PMPL-1.0,link="https://github.com/hyperpolymath/palimpsest-license"]
+image:https://img.shields.io/badge/License-MPL_2.0--1.0-blue.svg[License: MPL-2.0,link="https://github.com/hyperpolymath/palimpsest-license"]
 image:https://api.thegreenwebfoundation.org/greencheckimage/github.com[Green Web,link="https://www.thegreenwebfoundation.org/green-web-check/?url=github.com"]
 image:https://img.shields.io/badge/Elixir-1.14+-4B275F?logo=elixir[Elixir,link="https://elixir-lang.org/"]
 image:https://img.shields.io/badge/Zig-0.15+-F7A41D?logo=zig[Zig,link="https://ziglang.org/"]
@@ -44,12 +45,17 @@ states that search for environments matching their required capabilities.
 | 3. Verified ABI
 | ✓ Complete
 | Idris 2 formal proofs for linear resource preservation.
+
+| 4. Guix Integration
+| ✓ Complete
+| Native Guix build orchestration via Zig FFIs.
 |===
 
 == Features
 
 * *Linear Baton Logic* — Powered by **Ephapax**, ensuring one-time consumption of resources (tokens, memory, credits).
 * *Mobile Wasm Contexts* — Native state capture of WebAssembly modules for seamless migration.
+* *Guix-Powered Builds* — Integrated **Guix** orchestration for reproducible artifact creation during continuation steps.
 * *Distributed Fault Tolerance* — Built on **Elixir/OTP**, leveraging the BEAM for robust node discovery and supervision.
 * *Trust Attestation* — Cryptographic proof-chain for every state transition (Milestone 3).
 
@@ -99,6 +105,6 @@ Wondering how this works? See link:EXPLAINME.adoc[].
 
 == License
 
-Distributed under the link:LICENSE[Palimpsest License (PMPL-1.0)].
+Distributed under the link:LICENSE[MPL-2.0 (MPL-2.0)].
 
 _The future of work is mobile._

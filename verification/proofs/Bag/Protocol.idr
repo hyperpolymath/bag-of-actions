@@ -1,4 +1,5 @@
--- SPDX-License-Identifier: PMPL-1.0-or-later
+-- SPDX-License-Identifier: MPL-2.0
+-- Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
 ||| Bag.Protocol: Base types and capability algebra for Bag-of-Actions.
 module Bag.Protocol
 
@@ -10,6 +11,7 @@ data Capability
   = Linux
   | MacOS
   | GPU
+  | Guix
   | TrustedHost String
   | SecretAccess String
 
@@ -18,6 +20,7 @@ Eq Capability where
   Linux == Linux = True
   MacOS == MacOS = True
   GPU == GPU = True
+  Guix == Guix = True
   (TrustedHost s1) == (TrustedHost s2) = s1 == s2
   (SecretAccess s1) == (SecretAccess s2) = s1 == s2
   _ == _ = False
@@ -37,5 +40,6 @@ capToTag : Capability -> Int
 capToTag Linux            = 1
 capToTag MacOS            = 2
 capToTag GPU              = 3
-capToTag (TrustedHost _)  = 4
-capToTag (SecretAccess _) = 5
+capToTag Guix             = 4
+capToTag (TrustedHost _)  = 5
+capToTag (SecretAccess _) = 6

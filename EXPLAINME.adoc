@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: PMPL-1.0-or-later
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
 = Bag-of-Actions — EXPLAINME
 :toc: preamble
 :toc-title: Contents
@@ -76,6 +77,30 @@ Caveat::
 While the handoff is formally proven in Idris 2, the current Elixir 
 implementation mirrors this logic but is not yet dynamically linked 
 to the Idris 2 binary.
+
+=== Guix-Powered Builds
+
+[quote, README.adoc]
+____
+Integrated Guix orchestration for reproducible artifact creation.
+____
+
+How this is implemented::
+The **Zig Execution Host** provides a native interface to the **Guix** 
+package manager. Before a Wasm transition occurs, the host can 
+trigger a `guix build` based on the Baton's requirements. This allows 
+mobile continuations to not just carry state, but to *build their 
+own execution environment* (or dependencies) reproducibly as they 
+move across the mesh.
+
+Code Paths::
+* link:src/main.zig[] — `runGuixBuild` function in the Zig host.
+* link:bag/lib/bag/baton.ex[] — `guix_package` field in the Baton metadata.
+
+Caveat::
+Current implementation uses the `guix` CLI. Future versions will move 
+to a direct Guix-Daemon socket interface for improved isolation and 
+performance.
 
 == Dogfooded Across The Account
 
