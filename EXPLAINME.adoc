@@ -54,27 +54,28 @@ Caveat::
 Milestone 1/2 uses function arguments for state. Full linear memory 
 snapshotting (dumping the `memory` section) is planned for Milestone 3.
 
-=== Distributed Fault Tolerance
+=== Polylingual Mesh
 
 [quote, README.adoc]
 ____
-Built on Elixir/OTP, leveraging the BEAM for robust node discovery.
+Orchestrated by Elixir, executed by Zig, proven by Idris.
 ____
 
 How this is implemented::
-We use Erlang's **`:pg` (Process Groups)** to form a decentralized 
-cluster. Any node that joins the `:bag_mesh` group can receive and 
-process Batons. The Elixir supervision tree ensures that if an 
-executor fails, the orchestrator remains alive to re-route work.
+The system boundary is governed by a **Verified ABI** defined in **Idris 2**. 
+It formally models the Baton as a linear resource and proves that 
+handoffs only occur when a target node satisfies the Baton's capability 
+requirements. The Idris 2 code produces witnesses of valid handoffs 
+that serve as the formal specification for the Elixir routing logic.
 
 Code Paths::
-* link:bag/lib/bag/mesh.ex[] — GenServer implementing the distributed registry.
-* link:bag/lib/bag/application.ex[] — Supervision tree definition.
+* link:verification/proofs/Bag/Protocol.idr[] — Capability algebra.
+* link:verification/proofs/Bag/Handoff.idr[] — Verified transition logic.
 
 Caveat::
-The current POC uses a random-walk routing strategy. Sophisticated 
-capability-based matching (e.g. "Run this on a node with a GPU") 
-is part of the Milestone 3 specification.
+While the handoff is formally proven in Idris 2, the current Elixir 
+implementation mirrors this logic but is not yet dynamically linked 
+to the Idris 2 binary.
 
 == Dogfooded Across The Account
 
@@ -88,6 +89,10 @@ is part of the Milestone 3 specification.
 
 | **Zig Host**
 | Minimal high-performance wrapper for Wasmtime execution.
+| link:https://github.com/hyperpolymath/boj-server[boj-server]
+
+| **Idris 2 ABI**
+| Formal proof of handoff safety and linearity.
 | link:https://github.com/hyperpolymath/boj-server[boj-server]
 
 | **RSR Template**
@@ -106,9 +111,8 @@ is tracked in Issue #3.
 
 [CAUTION]
 ====
-**Formal ABI**: The verified handoff protocol is planned for Milestone 3. 
-Currently, the "Pass" logic is implemented in Elixir without formal 
-Idris 2 proofs.
+**Dynamic Idris Linking**: The formal proofs exist in source but are not 
+yet invoked at runtime by the Elixir orchestrator.
 ====
 
 == Evidence index

@@ -42,7 +42,7 @@ states that search for environments matching their required capabilities.
 | Distributed orchestration and Baton handoffs via process groups.
 
 | 3. Verified ABI
-| [Planned]
+| ✓ Complete
 | Idris 2 formal proofs for linear resource preservation.
 |===
 
