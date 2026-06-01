@@ -1,0 +1,19 @@
+-- SPDX-License-Identifier: PMPL-1.0-or-later
+-- Idris2 package file for the Bag-of-Actions Verified ABI.
+
+package bag
+
+authors    = "Jonathan D.A. Jewell"
+version    = 0.1.0
+license    = "PMPL-1.0-or-later"
+brief      = "Verified handoff protocol and linear resource tracking for Bag-of-Actions"
+readme     = "../../README.adoc"
+
+sourcedir  = "."
+
+modules    = Bag.Protocol
+           , Bag.Baton
+           , Bag.Handoff
+
+depends    = base
+           , contrib
