@@ -219,8 +219,12 @@ pub fn main() !void {
     }
 
     if (std.mem.eql(u8, args[1], "nodes")) {
-        // Print the estate node names from the single mirrored manifest.
-        try estate.listNodeNames(std.fs.File.stdout());
+        // Print "name<TAB>cost" per node from the single mirrored manifest, so
+        // the Elixir planner reads both the node list and its tropical grade
+        // from here instead of keeping its own copy.
+        for (estate.estate) |node| {
+            try printOut(allocator, "{s}\t{d}\n", .{ node.name, node.cost });
+        }
         return;
     }
 

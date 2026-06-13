@@ -34,6 +34,9 @@ pub const Capability = enum(u32) {
 pub const Node = struct {
     name: []const u8,
     capabilities: []const Capability,
+    /// Tropical (min-plus) money grade of running a unit of work here. Owned
+    /// nodes ≈ free; the github-runner is the paid route. Mirrors Estate.idr.
+    cost: u32,
 };
 
 /// The Estate Manifest (Hand-translated from verification/proofs/Bag/Estate.idr)
@@ -41,25 +44,19 @@ pub const estate = [_]Node{
     .{
         .name = "mesh-laptop",
         .capabilities = &[_]Capability{ .macos, .guix, .trusted_host, .zig },
+        .cost = 2,
     },
     .{
         .name = "mesh-server-1",
         .capabilities = &[_]Capability{ .linux, .gpu, .guix, .trusted_host, .zig, .rust, .cargo, .deno },
+        .cost = 1,
     },
     .{
         .name = "mesh-github-runner",
         .capabilities = &[_]Capability{ .linux, .secret_access },
+        .cost = 100,
     },
 };
-
-/// Print the estate node names, one per line. Lets the Elixir orchestrator read
-/// the node list from this single mirrored manifest instead of duplicating it.
-pub fn listNodeNames(writer: anytype) !void {
-    for (estate) |node| {
-        try writer.writeAll(node.name);
-        try writer.writeAll("\n");
-    }
-}
 
 pub fn findNode(name: []const u8) ?Node {
     for (estate) |node| {
