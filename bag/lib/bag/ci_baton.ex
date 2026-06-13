@@ -11,7 +11,17 @@ defmodule Bag.CiBaton do
   that replaces a paid GitHub Actions run — it can migrate to, and be consumed
   on, any other node without re-executing the check.
   """
-  defstruct [:id, :check_id, :node, :required_cap, :command, :verdict, :exit_code]
+  defstruct [
+    :id,
+    :check_id,
+    :node,
+    :required_cap,
+    :command,
+    :verdict,
+    :exit_code,
+    mutating: false,
+    risk: :low
+  ]
 
   @type verdict :: :pending | :pass | :fail | :suspended | :error
 
@@ -40,7 +50,9 @@ defmodule Bag.CiBaton do
       required_cap: Keyword.get(opts, :required_cap, "linux"),
       command: command,
       verdict: :pending,
-      exit_code: nil
+      exit_code: nil,
+      mutating: Keyword.get(opts, :mutating, false),
+      risk: Keyword.get(opts, :risk, :low)
     }
   end
 end
