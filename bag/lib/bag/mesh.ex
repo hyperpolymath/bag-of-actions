@@ -97,14 +97,15 @@ defmodule Bag.Mesh do
 
     case capable do
       [] ->
-        IO.puts("Mesh: NO node satisfies '#{required_cap}' for check #{check_id}. Suspended.")
+        # Operational logs go to stderr — stdout is reserved for machine output.
+        IO.puts(:stderr, "Mesh: NO node satisfies '#{required_cap}' for check #{check_id}. Suspended.")
         {:reply, {:suspended, nil, nil}, state}
 
       [node | _] ->
         baton = CiBaton.new(check_id, command, node: node, required_cap: required_cap)
-        IO.puts("Mesh: routing check #{check_id} → #{node} (cap: #{required_cap})")
+        IO.puts(:stderr, "Mesh: routing check #{check_id} → #{node} (cap: #{required_cap})")
         {verdict, updated, _output} = Executor.run_check(baton, freeze_path)
-        IO.puts("Mesh: check #{check_id} verdict=#{verdict} on #{node} (0 GitHub minutes)")
+        IO.puts(:stderr, "Mesh: check #{check_id} verdict=#{verdict} on #{node} (0 GitHub minutes)")
         {:reply, {verdict, node, updated}, state}
     end
   end
