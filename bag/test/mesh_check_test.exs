@@ -7,7 +7,7 @@ defmodule Bag.MeshCheckTest do
   emitter — all on owned compute, zero GitHub Actions minutes.
   """
   use ExUnit.Case, async: false
-  alias Bag.{Mesh, CiSweep, Executor}
+  alias Bag.{Mesh, CiSweep, Executor, Budget}
 
   @repo_root Path.expand("../..", __DIR__)
 
@@ -44,6 +44,16 @@ defmodule Bag.MeshCheckTest do
   test "Mesh SUSPENDS when no node can satisfy the (unknown/unprovable) capability" do
     assert {:suspended, nil, nil} =
              Mesh.submit_check("mesh-susp", ["true"], required_cap: "bogus-cap")
+  end
+
+  test "submit_planned routes by budget, runs the check, and returns residue" do
+    spec = %{check_id: "planned-fmt", command: ["zig", "fmt", "--check", "build.zig"], required_cap: "zig"}
+    result = Mesh.submit_planned(spec, Budget.unlimited())
+
+    assert result.verdict == :pass
+    assert result.node in ["mesh-server-1", "mesh-laptop"]
+    # Ran on owned compute (relegated) → still owes the GitHub-native gate.
+    assert result.residue == {:owes, :github_required_check}
   end
 
   test "CiSweep runs a batch of checks and summarises verdicts" do

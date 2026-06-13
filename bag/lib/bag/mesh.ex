@@ -5,7 +5,7 @@ defmodule Bag.Mesh do
   The distributed orchestrator for Batons.
   """
   use GenServer
-  alias Bag.{Baton, CiBaton, Executor}
+  alias Bag.{ActionResult, Baton, CiBaton, Budget, Executor, Planner}
 
   def start_link(opts) do
     {:ok, pid} = GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -25,6 +25,18 @@ defmodule Bag.Mesh do
   """
   def submit_check(check_id, command, opts \\ []) when is_binary(check_id) and is_list(command) do
     GenServer.call(__MODULE__, {:submit_check, check_id, command, opts}, 60_000)
+  end
+
+  @doc """
+  Budget-and-capability-aware submission. The planner selects the cheapest
+  capable node the budget can afford (gating mutating work on a verifier); the
+  check runs there; the result carries structured residue.
+
+  `spec`: `%{check_id, command, required_cap, mutating?, risk?, verifier?}`.
+  Returns a `Bag.ActionResult` (verdict `:pass | :fail | :rejected | :suspended`).
+  """
+  def submit_planned(spec, %Budget{} = budget \\ Budget.unlimited()) do
+    GenServer.call(__MODULE__, {:submit_planned, spec, budget}, 60_000)
   end
 
   @doc """
@@ -97,15 +109,47 @@ defmodule Bag.Mesh do
 
     case capable do
       [] ->
-        IO.puts("Mesh: NO node satisfies '#{required_cap}' for check #{check_id}. Suspended.")
+        # Operational logs go to stderr — stdout is reserved for machine output.
+        IO.puts(:stderr, "Mesh: NO node satisfies '#{required_cap}' for check #{check_id}. Suspended.")
         {:reply, {:suspended, nil, nil}, state}
 
       [node | _] ->
         baton = CiBaton.new(check_id, command, node: node, required_cap: required_cap)
-        IO.puts("Mesh: routing check #{check_id} → #{node} (cap: #{required_cap})")
+        IO.puts(:stderr, "Mesh: routing check #{check_id} → #{node} (cap: #{required_cap})")
         {verdict, updated, _output} = Executor.run_check(baton, freeze_path)
-        IO.puts("Mesh: check #{check_id} verdict=#{verdict} on #{node} (0 GitHub minutes)")
+        IO.puts(:stderr, "Mesh: check #{check_id} verdict=#{verdict} on #{node} (0 GitHub minutes)")
         {:reply, {verdict, node, updated}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:submit_planned, spec, budget}, _from, state) do
+    case Planner.plan(spec, budget) do
+      {:ok, node, cost} ->
+        IO.puts(:stderr, "Mesh: planned #{spec.check_id} → #{node} (money cost #{cost})")
+
+        baton =
+          CiBaton.new(spec.check_id, spec.command,
+            node: node,
+            required_cap: spec.required_cap,
+            mutating: Map.get(spec, :mutating, false),
+            risk: Map.get(spec, :risk, :low)
+          )
+
+        freeze_path = Path.join(System.tmp_dir!(), "#{spec.check_id}.baton")
+        {verdict, updated, _output} = Executor.run_check(baton, freeze_path)
+        # Relegated = ran on an owned node, not GitHub's required-check route.
+        relegated = node != "mesh-github-runner"
+        result = ActionResult.new(verdict, node, relegated: relegated, baton: updated)
+        {:reply, result, state}
+
+      {:rejected, reason} ->
+        IO.puts(:stderr, "Mesh: REJECTED #{spec.check_id}: #{reason}")
+        {:reply, %ActionResult{verdict: :rejected, node: nil, residue: {:owes, reason}}, state}
+
+      {:suspended, reason} ->
+        IO.puts(:stderr, "Mesh: SUSPENDED #{spec.check_id}: #{reason} (budget/capability)")
+        {:reply, %ActionResult{verdict: :suspended, node: nil, residue: :clean}, state}
     end
   end
 

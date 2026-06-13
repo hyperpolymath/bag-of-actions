@@ -219,8 +219,12 @@ pub fn main() !void {
     }
 
     if (std.mem.eql(u8, args[1], "nodes")) {
-        // Print the estate node names from the single mirrored manifest.
-        try estate.listNodeNames(std.fs.File.stdout());
+        // Print "name<TAB>cost" per node from the single mirrored manifest, so
+        // the Elixir planner reads both the node list and its tropical grade
+        // from here instead of keeping its own copy.
+        for (estate.estate) |node| {
+            try printOut(allocator, "{s}\t{d}\n", .{ node.name, node.cost });
+        }
         return;
     }
 
@@ -250,11 +254,11 @@ pub fn main() !void {
             }
         }
 
+        // Exit code is the signal (0 = match, 1 = no match); the Elixir
+        // Executor reads the status, not any stdout/stderr text.
         if (!has_unknown and estate.nodeSatisfies(node_name, reqs[0..valid_count])) {
-            std.debug.print("MATCH: TRUE\n", .{});
             std.process.exit(0);
         } else {
-            std.debug.print("MATCH: FALSE\n", .{});
             std.process.exit(1);
         }
     } else if (std.mem.eql(u8, args[1], "check")) {
