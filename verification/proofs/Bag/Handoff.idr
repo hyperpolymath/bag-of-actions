@@ -31,8 +31,8 @@ data HandoffResult : HandoffRequest -> Type where
 export
 validateHandoff : (req : HandoffRequest) -> HandoffResult req
 validateHandoff req with (satisfies (requiredCap (baton req)) (targetCaps req)) proof p
-  | True  = Validated req p
-  | False = Rejected req
+  validateHandoff req | True  = Validated req p
+  validateHandoff req | False = Rejected req
 
 ||| Linearity Lemma: A handoff must consume the source Baton and produce a target one.
 ||| This proves that we never duplicate work during a handoff.
@@ -45,5 +45,5 @@ handoffPreservesLinearity :
   -> {auto nodePf : targetNode req = dst}
   -> HandoffResult req
   -> IsLinear b Executing -- Produces exactly one executing witness for the target
-handoffPreservesLinearity b src dst (InFlight b src) req (Validated req pf) = InFlight b dst
-handoffPreservesLinearity b src dst (InFlight b src) req (Rejected req)    = InFlight b src
+handoffPreservesLinearity b src dst (InFlight _ _) req (Validated _ _) = InFlight b dst
+handoffPreservesLinearity b src dst (InFlight _ _) req (Rejected _)    = InFlight b src

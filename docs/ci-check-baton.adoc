@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
+= CI-check Baton — estate CI on owned compute
+:toc: preamble
+:icons: font
+
+The *CI-check Baton* is the first concrete answer to the GitHub Actions billing
+wall (see `dev-notes/2026-06-13-ci-billing-to-bag-of-actions-pivot.adoc`): an
+estate CI check that runs on *owned compute* with *zero billable minutes*, is
+routed only to a node that has the *required capability*, and whose *verdict is
+frozen and attested* into a portable envelope that can migrate to — and be
+consumed on — another node without re-running the check.
+
+It sits alongside the original counter demo (`Bag.Baton` + `counter.wat`): that
+demo proves a Baton can carry mobile *state*; the CI-check Baton proves a Baton
+can carry mobile *CI work and its (tamper-evident) verdict*.
+
+== The model
+
+[cols="1,3"]
+|===
+| `check_id`     | names the check, e.g. `zig-fmt`
+| `command`      | the argv to run, e.g. `zig fmt --check build.zig`
+| `required_cap` | the capability a node must have to run it (`linux`, `guix`, `zig`, `rust`, `cargo`, `deno`, …)
+| `node`         | the node the work is routed to
+| `verdict`      | `pending` (frozen, not yet run) / `pass` / `fail`
+| `exit_code`    | the executed check's exit status
+| `digest`       | HMAC-SHA256 over the fields (keyed by `BAG_ATTEST_KEY`) — makes the verdict tamper-evident
+|===
+
+Lifecycle:
+
+. *Match* — the orchestrator picks an estate node that satisfies `required_cap`.
+  Capability-matching is `estate.nodeSatisfies` (Zig), mirrored from the formal
+  source of truth `verification/proofs/Bag/Estate.idr` /
+  `verification/proofs/Bag/Protocol.idr`. An *unknown/unprovable* capability
+  never matches (fail-safe).
+. *Execute* — if a capable node exists, the check runs there. If not, the work
+  is *suspended* (a `pending` Baton is frozen so it can migrate to a capable node).
+. *Freeze + attest* — the verdict is written to a versioned envelope
+  (`BAG-CHECK-BATON v1`) with an HMAC digest.
+. *Thaw* — any other node reads the verdict from the envelope and *verifies the
+  digest*; a tampered envelope is rejected (exit 3). Zero re-execution.
+
+The capability taxonomy is kept in step across THREE layers — add a capability
+in `Protocol.idr` (`capToTag`) AND `estate.Capability` (Zig) AND the Elixir
+translation, or in none. The Elixir orchestrator reads the node list from the
+single mirrored manifest via `bag_of_actions nodes` (no 4th copy to drift).
+
+== Run it
+
+[source,sh]
+----
+# One-shot demonstration (build + pass + fail + suspend + attest/tamper + thaw):
+./scripts/ci-baton-demo.sh
+
+# Directly via the Zig host:
+zig build
+./zig-out/bin/bag_of_actions nodes                  # node names from the manifest
+./zig-out/bin/bag_of_actions check mesh-server-1 zig my-check /tmp/v.txt zig fmt --check build.zig
+./zig-out/bin/bag_of_actions thaw /tmp/v.txt         # verifies attestation, then reports
+
+# Through the Elixir mesh (routes to a capability-matched node):
+cd bag && mix test                                   # 10 e2e tests
+----
+
+[source,elixir]
+----
+# A single check, routed through the orchestrator:
+{:pass, node, _baton} = Bag.Mesh.submit_check("zig-fmt", ["zig","fmt","--check","build.zig"], required_cap: "zig")
+
+# A whole sweep (the entry point hypatia/ci-health will call):
+checks = [%{check_id: "fmt", command: ["zig","fmt","--check","build.zig"], required_cap: "zig"}]
+{results, summary} = Bag.CiSweep.run(checks)
+Bag.CiSweep.all_passed?({results, summary})          # green/red for the sweep, 0 paid minutes
+----
+
+Exit codes from the `check`/`thaw` subcommands double as a CI gate: `0` = pass,
+`1` = fail, `2` = suspended (no capable node), `3` = tampered (attestation failed).
+
+== Why this dissolves the billing wall
+
+A GitHub-hosted run costs billable minutes and, on this estate, is gated behind
+an unpaid spending limit (wall A) and a restrictive action allow-list (wall B).
+A CI-check Baton runs the *same check* on a node we already own and pay nothing
+extra for, and the *attested verdict* — not the runner — becomes the artifact
+other nodes trust. The check that GitHub would have refused to start runs anyway.
+
+== Done / next
+
+Done (wired across Idris ↔ Zig ↔ Elixir):
+
+* Toolchain capability taxonomy (`Zig`/`Rust`/`Cargo`/`Deno`), mirrored in all
+  three layers; dev nodes carry the toolchain caps.
+* Attestation: HMAC-SHA256 digest, verified on thaw, tamper rejected.
+* `CiBaton` wired into `Bag.Mesh` (`submit_check`) + the `Bag.CiSweep` batch emitter.
+* Fail-safe matching (unknown capability never matches).
+* Formal layer now compiles (`idris2 --build bag.ipkg` — three pre-existing
+  breaks fixed: `List.find`, `with`-clause shorthand, non-linear patterns).
+
+Next:
+
+* *Cross-repo (push-gated):* bridge `hypatia/scripts/ci-health` to call
+  `Bag.CiSweep.run/1` for the estate's real checks instead of flagging GitHub
+  failures.
+* Replace the HMAC dev key with real per-node signing (ed25519 / the estate
+  signing key) so a thawed verdict is authenticity-evident, not just integrity-evident.
+* WASI-compile self-contained checks so the check body itself is a frozen Wasm
+  Baton (the purest form of the model).

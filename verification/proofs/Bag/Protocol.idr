@@ -5,7 +5,9 @@ module Bag.Protocol
 
 %default total
 
-||| Core hardware and identity capabilities.
+||| Core hardware, identity, and toolchain capabilities.
+||| Toolchain capabilities (Zig/Rust/Cargo/Deno) let a CI-check Baton be routed
+||| only to a node that actually has the toolchain the check needs.
 public export
 data Capability
   = Linux
@@ -14,6 +16,10 @@ data Capability
   | Guix
   | TrustedHost String
   | SecretAccess String
+  | Zig
+  | Rust
+  | Cargo
+  | Deno
 
 public export
 Eq Capability where
@@ -23,6 +29,10 @@ Eq Capability where
   Guix == Guix = True
   (TrustedHost s1) == (TrustedHost s2) = s1 == s2
   (SecretAccess s1) == (SecretAccess s2) = s1 == s2
+  Zig == Zig = True
+  Rust == Rust = True
+  Cargo == Cargo = True
+  Deno == Deno = True
   _ == _ = False
 
 ||| Check if a node's provided capabilities satisfy the Baton's requirements.
@@ -43,3 +53,7 @@ capToTag GPU              = 3
 capToTag Guix             = 4
 capToTag (TrustedHost _)  = 5
 capToTag (SecretAccess _) = 6
+capToTag Zig              = 7
+capToTag Rust             = 8
+capToTag Cargo            = 9
+capToTag Deno             = 10

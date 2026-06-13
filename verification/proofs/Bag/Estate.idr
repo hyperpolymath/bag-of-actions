@@ -4,6 +4,7 @@
 module Bag.Estate
 
 import Bag.Protocol
+import Data.List
 
 %default total
 
@@ -19,15 +20,15 @@ record Node where
 public export
 estate : List Node
 estate =
-  [ MkNode "mesh-laptop"        [MacOS, Guix, TrustedHost "Jonathan"]
-  , MkNode "mesh-server-1"      [Linux, GPU, Guix, TrustedHost "Core-Infrastructure"]
+  [ MkNode "mesh-laptop"        [MacOS, Guix, TrustedHost "Jonathan", Zig]
+  , MkNode "mesh-server-1"      [Linux, GPU, Guix, TrustedHost "Core-Infrastructure", Zig, Rust, Cargo, Deno]
   , MkNode "mesh-github-runner" [Linux, SecretAccess "GitHub-Deploy-Token"]
   ]
 
 ||| Lookup a node by name in the estate.
 public export
 findNode : String -> Maybe Node
-findNode target = List.find (\n => name n == target) estate
+findNode target = find (\n => name n == target) estate
 
 ||| Verify that a specific node in the estate satisfies a set of requirements.
 public export
