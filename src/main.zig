@@ -254,11 +254,11 @@ pub fn main() !void {
             }
         }
 
+        // Exit code is the signal (0 = match, 1 = no match); the Elixir
+        // Executor reads the status, not any stdout/stderr text.
         if (!has_unknown and estate.nodeSatisfies(node_name, reqs[0..valid_count])) {
-            std.debug.print("MATCH: TRUE\n", .{});
             std.process.exit(0);
         } else {
-            std.debug.print("MATCH: FALSE\n", .{});
             std.process.exit(1);
         }
     } else if (std.mem.eql(u8, args[1], "check")) {
