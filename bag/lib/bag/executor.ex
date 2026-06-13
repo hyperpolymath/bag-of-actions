@@ -9,6 +9,18 @@ defmodule Bag.Executor do
   @executor_path Path.expand("../../../zig-out/bin/bag_of_actions", __DIR__)
 
   @doc """
+  Returns the estate node names, read from the single mirrored manifest
+  (`estate.zig` ← `verification/proofs/Bag/Estate.idr`) via the Zig host — so the
+  orchestrator never keeps its own copy of the node list to drift out of step.
+  """
+  def list_nodes do
+    case System.cmd(@executor_path, ["nodes"], cd: Path.expand("../../../", __DIR__)) do
+      {output, 0} -> String.split(output, "\n", trim: true)
+      {_output, _code} -> []
+    end
+  end
+
+  @doc """
   Checks if a node satisfies the required capabilities using the Idris-to-Zig bridge.
   """
   def node_satisfies?(node_name, requirements) do
@@ -18,6 +30,53 @@ defmodule Bag.Executor do
       {_output, 0} -> true
       {_output, _code} -> false
     end
+  end
+
+  @doc """
+  Runs a CI-check Baton on its capability-matched node, via the Zig `check`
+  subcommand, and freezes the verdict to `freeze_path`.
+
+  Returns `{verdict, updated_baton, output}` where verdict is one of
+  `:pass | :fail | :suspended | :error`. No GitHub Actions minutes are used —
+  the check runs on this (owned) node and the verdict is the portable artifact.
+  """
+  def run_check(%Bag.CiBaton{} = b, freeze_path) do
+    args = ["check", b.node, b.required_cap, b.check_id, freeze_path | b.command]
+
+    {output, code} =
+      System.cmd(@executor_path, args, cd: Path.expand("../../../", __DIR__), stderr_to_stdout: true)
+
+    verdict =
+      case code do
+        0 -> :pass
+        1 -> :fail
+        2 -> :suspended
+        _ -> :error
+      end
+
+    {verdict, %{b | verdict: verdict, exit_code: code}, output}
+  end
+
+  @doc """
+  Thaws a frozen CI-check verdict on another node — zero re-execution.
+  Returns `{verdict, output}`.
+  """
+  def thaw_check(freeze_path) do
+    {output, code} =
+      System.cmd(@executor_path, ["thaw", freeze_path],
+        cd: Path.expand("../../../", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    verdict =
+      case code do
+        0 -> :pass
+        1 -> :fail
+        3 -> :tampered
+        _ -> :error
+      end
+
+    {verdict, output}
   end
 
   @doc """

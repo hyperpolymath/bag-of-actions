@@ -5,12 +5,26 @@ defmodule Bag.Mesh do
   The distributed orchestrator for Batons.
   """
   use GenServer
-  alias Bag.{Baton, Executor}
+  alias Bag.{Baton, CiBaton, Executor}
 
   def start_link(opts) do
     {:ok, pid} = GenServer.start_link(__MODULE__, opts, name: __MODULE__)
     :ok = :pg.join(:bag_mesh, pid)
     {:ok, pid}
+  end
+
+  @doc """
+  Submit a CI-check Baton to the mesh. The orchestrator selects an estate node
+  that satisfies `required_cap` (reading the node list from the mirrored
+  manifest, capability-matching via the Idris-to-Zig bridge), runs the check
+  there, and freezes an attested verdict — with ZERO GitHub Actions minutes.
+
+  Options: `:required_cap` (default "linux"), `:freeze_path`.
+  Returns `{verdict, node, baton}` where verdict is
+  `:pass | :fail | :suspended | :tampered | :error` (`node` is nil if suspended).
+  """
+  def submit_check(check_id, command, opts \\ []) when is_binary(check_id) and is_list(command) do
+    GenServer.call(__MODULE__, {:submit_check, check_id, command, opts}, 60_000)
   end
 
   @doc """
@@ -67,6 +81,32 @@ defmodule Bag.Mesh do
     # Ensure :pg is started (it's often started by default but let's be safe)
     # Actually :pg.start_link() is for a scope. The default scope is always available.
     {:ok, %{batons: %{}}}
+  end
+
+  @impl true
+  def handle_call({:submit_check, check_id, command, opts}, _from, state) do
+    required_cap = Keyword.get(opts, :required_cap, "linux")
+
+    freeze_path =
+      Keyword.get(opts, :freeze_path, Path.join(System.tmp_dir!(), "#{check_id}.baton"))
+
+    # Select a capable node from the mirrored estate manifest.
+    capable =
+      Executor.list_nodes()
+      |> Enum.filter(fn node -> Executor.node_satisfies?(node, [required_cap]) end)
+
+    case capable do
+      [] ->
+        IO.puts("Mesh: NO node satisfies '#{required_cap}' for check #{check_id}. Suspended.")
+        {:reply, {:suspended, nil, nil}, state}
+
+      [node | _] ->
+        baton = CiBaton.new(check_id, command, node: node, required_cap: required_cap)
+        IO.puts("Mesh: routing check #{check_id} → #{node} (cap: #{required_cap})")
+        {verdict, updated, _output} = Executor.run_check(baton, freeze_path)
+        IO.puts("Mesh: check #{check_id} verdict=#{verdict} on #{node} (0 GitHub minutes)")
+        {:reply, {verdict, node, updated}, state}
+    end
   end
 
   @impl true

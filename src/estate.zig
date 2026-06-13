@@ -2,7 +2,8 @@
 // Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
 const std = @import("std");
 
-/// Mapping to Idris 2 Bag.Protocol.Capability tags
+/// Mapping to Idris 2 Bag.Protocol.Capability tags (capToTag). Kept in step with
+/// verification/proofs/Bag/Protocol.idr — add a capability in BOTH or neither.
 pub const Capability = enum(u32) {
     linux = 1,
     macos = 2,
@@ -10,6 +11,10 @@ pub const Capability = enum(u32) {
     guix = 4,
     trusted_host = 5,
     secret_access = 6,
+    zig = 7,
+    rust = 8,
+    cargo = 9,
+    deno = 10,
 
     pub fn fromString(s: []const u8) ?Capability {
         if (std.mem.eql(u8, s, "linux")) return .linux;
@@ -18,6 +23,10 @@ pub const Capability = enum(u32) {
         if (std.mem.eql(u8, s, "guix")) return .guix;
         if (std.mem.eql(u8, s, "trusted_host")) return .trusted_host;
         if (std.mem.eql(u8, s, "secret_access")) return .secret_access;
+        if (std.mem.eql(u8, s, "zig")) return .zig;
+        if (std.mem.eql(u8, s, "rust")) return .rust;
+        if (std.mem.eql(u8, s, "cargo")) return .cargo;
+        if (std.mem.eql(u8, s, "deno")) return .deno;
         return null;
     }
 };
@@ -31,17 +40,26 @@ pub const Node = struct {
 pub const estate = [_]Node{
     .{
         .name = "mesh-laptop",
-        .capabilities = &[_]Capability{ .macos, .guix, .trusted_host },
+        .capabilities = &[_]Capability{ .macos, .guix, .trusted_host, .zig },
     },
     .{
         .name = "mesh-server-1",
-        .capabilities = &[_]Capability{ .linux, .gpu, .guix, .trusted_host },
+        .capabilities = &[_]Capability{ .linux, .gpu, .guix, .trusted_host, .zig, .rust, .cargo, .deno },
     },
     .{
         .name = "mesh-github-runner",
         .capabilities = &[_]Capability{ .linux, .secret_access },
     },
 };
+
+/// Print the estate node names, one per line. Lets the Elixir orchestrator read
+/// the node list from this single mirrored manifest instead of duplicating it.
+pub fn listNodeNames(writer: anytype) !void {
+    for (estate) |node| {
+        try writer.writeAll(node.name);
+        try writer.writeAll("\n");
+    }
+}
 
 pub fn findNode(name: []const u8) ?Node {
     for (estate) |node| {
