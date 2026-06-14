@@ -20,13 +20,25 @@ can carry mobile *CI work and its (tamper-evident) verdict*.
 [cols="1,3"]
 |===
 | `check_id`     | names the check, e.g. `zig-fmt`
-| `command`      | the argv to run, e.g. `zig fmt --check build.zig`
-| `required_cap` | the capability a node must have to run it (`linux`, `guix`, `zig`, `rust`, `cargo`, `deno`, …)
+| `command`      | the argv to run; `wasm://path` prefix triggers WASI execution via `wasmtime`
+| `required_cap` | the capability a node must have to run it (`linux`, `guix`, `zig`, `rust`, `cargo`, `deno`, `scorecard`, `wasm`, …)
 | `node`         | the node the work is routed to
 | `verdict`      | `pending` (frozen, not yet run) / `pass` / `fail`
 | `exit_code`    | the executed check's exit status
-| `digest`       | HMAC-SHA256 over the fields (keyed by `BAG_ATTEST_KEY`) — makes the verdict tamper-evident
+| `digest`       | HMAC-SHA256 over the canonical string (keyed by `BAG_ATTEST_KEY`) — integrity-evident
+| `signature`    | ed25519 signature over the same canonical string (hex-encoded, 128 chars) — authenticity-evident
+| `signing_pubkey` | raw ed25519 public key of the signing node (hex-encoded, 64 chars) — self-contained, no key lookup needed
+| `wasm_path`    | path to the WASM module (metadata); `wasm_digest` (SHA-256) is bound into the canonical string
+| `tool_version` | tool version string from `BAG_TOOL_VERSION` (e.g., `"scorecard 5.1.0"`) — bound into canonical string
+| `artifact_inline_b64` | small artifact base64-inlined if ≤ `BAG_ARTIFACT_INLINE_MAX` bytes (default 4096)
 |===
+
+Both attestation fields are optional per-envelope.
+`digest` is always computed.
+`signature` + `signing_pubkey` are present when the executing node has a signing key
+(`BAG_SIGN_KEY_PATH` env var, or `~/.ssh/id_ed25519_signing` by default).
+On thaw: if both layers are present, both must verify; if only HMAC is present, only HMAC is verified.
+The estate signing key is `id_ed25519_signing` — `id_ed25519` is auth-only and *must not* be used here.
 
 Lifecycle:
 
@@ -46,6 +58,31 @@ The capability taxonomy is kept in step across THREE layers — add a capability
 in `Protocol.idr` (`capToTag`) AND `estate.Capability` (Zig) AND the Elixir
 translation, or in none. The Elixir orchestrator reads the node list from the
 single mirrored manifest via `bag_of_actions nodes` (no 4th copy to drift).
+
+An *unknown/unprovable* capability string never matches any node — the `match`
+subcommand exits 1 and the Elixir orchestrator suspends the check.
+
+== External tools as Baton payloads
+
+CI/security tools that ship as a CLI, container, or stable binary can be run _as
+a Baton payload_ without reimplementing their semantics. The Actions wrapper that
+GitHub normally provides is not the unit being replaced — the underlying executable
+is.
+
+*OSSF Scorecard* is the first worked example:
+
+* The `ossf/scorecard-action` wrapper is NOT reimplemented.
+* The `scorecard` CLI (or `ghcr.io/ossf/scorecard:latest` container) is the
+  executable payload — it runs on a `scorecard`-capable node via
+  `scripts/baton-scorecard.sh`.
+* The JSON result is written to `_bag_artifacts/scorecard/scorecard.json`; the Zig
+  host hashes it and includes the SHA-256 in the frozen Baton envelope.
+* Publication to the OSSF API, GitHub Security tab (SARIF), and OSSF badge remain
+  separate cloud-native bridges — they are not replaced by this Batonisation.
+
+The general classification (Batonisable executable / split-boundary tool / native
+Baton candidate / not Batonisable yet) and the ten Batonisation rules live in
+`docs/external-tool-batonisation.adoc`.
 
 == Run it
 
@@ -90,20 +127,29 @@ other nodes trust. The check that GitHub would have refused to start runs anyway
 
 Done (wired across Idris ↔ Zig ↔ Elixir):
 
-* Toolchain capability taxonomy (`Zig`/`Rust`/`Cargo`/`Deno`), mirrored in all
-  three layers; dev nodes carry the toolchain caps.
-* Attestation: HMAC-SHA256 digest, verified on thaw, tamper rejected.
+* Toolchain capability taxonomy (`Zig`/`Rust`/`Cargo`/`Deno`/`Scorecard`/`Wasm`),
+  mirrored in all three layers; dev nodes carry the toolchain caps.
+* Attestation: dual-layer (HMAC-SHA256 integrity + ed25519 authenticity). Thaw
+  rejects if either present layer fails. `BAG_SIGN_KEY_PATH` / `~/.ssh/id_ed25519_signing`
+  is the per-node signing key; unsigned Batons (HMAC-only) remain valid.
 * `CiBaton` wired into `Bag.Mesh` (`submit_check`) + the `Bag.CiSweep` batch emitter.
 * Fail-safe matching (unknown capability never matches).
-* Formal layer now compiles (`idris2 --build bag.ipkg` — three pre-existing
-  breaks fixed: `List.find`, `with`-clause shorthand, non-linear patterns).
+* Formal layer now compiles (`idris2 --build bag.ipkg`).
+* `hypatia/scripts/ci-health/run.sh` calls `Bag.CiSweep.run/1` for the estate's
+  CI checks — zero GitHub minutes; sitrep reads the cached JSON verdict.
+* External tool Batonisation pattern: Scorecard as first worked example
+  (`scripts/baton-scorecard.sh` exports `BAG_TOOL_VERSION`).
+* WASI-compile self-contained checks: `src/checks/zig_fmt.zig` compiles to
+  `wasm32-wasi` (`zig build wasm` → `zig-out/lib/zig_fmt.wasm`). The `wasm://`
+  command prefix routes execution through `wasmtime run --dir=.`; the wasm module
+  SHA-256 (`wasm_digest`) is bound into the canonical string and attested.
+* Artifact-bearing CheckBaton v2: `tool_version` (`BAG_TOOL_VERSION`),
+  `artifact_inline_b64` (≤`BAG_ARTIFACT_INLINE_MAX` bytes inline as base64),
+  all bound into the canonical string so tampering is detected on thaw.
+  `ci-checks.exs` ships a `zig-fmt-wasm` check that exercises the full path.
 
 Next:
 
-* *Cross-repo (push-gated):* bridge `hypatia/scripts/ci-health` to call
-  `Bag.CiSweep.run/1` for the estate's real checks instead of flagging GitHub
-  failures.
-* Replace the HMAC dev key with real per-node signing (ed25519 / the estate
-  signing key) so a thawed verdict is authenticity-evident, not just integrity-evident.
-* WASI-compile self-contained checks so the check body itself is a frozen Wasm
-  Baton (the purest form of the model).
+* Multi-artifact support (SARIF → structured residue, parallel artifact binding).
+* WASM module distribution (ship check modules with the estate; hash-pin them
+  in the manifest so the wasm_digest is a content-addressed reference).

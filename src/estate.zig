@@ -15,6 +15,8 @@ pub const Capability = enum(u32) {
     rust = 8,
     cargo = 9,
     deno = 10,
+    scorecard = 11,
+    wasm = 12,
 
     pub fn fromString(s: []const u8) ?Capability {
         if (std.mem.eql(u8, s, "linux")) return .linux;
@@ -27,6 +29,8 @@ pub const Capability = enum(u32) {
         if (std.mem.eql(u8, s, "rust")) return .rust;
         if (std.mem.eql(u8, s, "cargo")) return .cargo;
         if (std.mem.eql(u8, s, "deno")) return .deno;
+        if (std.mem.eql(u8, s, "scorecard")) return .scorecard;
+        if (std.mem.eql(u8, s, "wasm")) return .wasm;
         return null;
     }
 };
@@ -48,7 +52,7 @@ pub const estate = [_]Node{
     },
     .{
         .name = "mesh-server-1",
-        .capabilities = &[_]Capability{ .linux, .gpu, .guix, .trusted_host, .zig, .rust, .cargo, .deno },
+        .capabilities = &[_]Capability{ .linux, .gpu, .guix, .trusted_host, .zig, .rust, .cargo, .deno, .scorecard, .wasm },
         .cost = 1,
     },
     .{
@@ -67,7 +71,7 @@ pub fn findNode(name: []const u8) ?Node {
 
 pub fn nodeSatisfies(node_name: []const u8, requirements: []const Capability) bool {
     const node = findNode(node_name) orelse return false;
-    
+
     for (requirements) |req| {
         var found = false;
         for (node.capabilities) |cap| {

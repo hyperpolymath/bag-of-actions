@@ -14,5 +14,10 @@
     check_id: "zig-build-test",
     command: ["zig", "build", "test"],
     required_cap: "zig"
+  },
+  %{
+    check_id: "zig-fmt-wasm",
+    command: ["wasm://zig-out/lib/zig_fmt.wasm", "src/main.zig", "src/estate.zig", "src/root.zig"],
+    required_cap: "wasm"
   }
 ]

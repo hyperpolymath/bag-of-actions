@@ -26,7 +26,7 @@ public export
 estate : List Node
 estate =
   [ MkNode "mesh-laptop"        [MacOS, Guix, TrustedHost "Jonathan", Zig] 2
-  , MkNode "mesh-server-1"      [Linux, GPU, Guix, TrustedHost "Core-Infrastructure", Zig, Rust, Cargo, Deno] 1
+  , MkNode "mesh-server-1"      [Linux, GPU, Guix, TrustedHost "Core-Infrastructure", Zig, Rust, Cargo, Deno, Scorecard, Wasm] 1
   , MkNode "mesh-github-runner" [Linux, SecretAccess "GitHub-Deploy-Token"] 100
   ]
 

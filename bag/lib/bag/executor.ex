@@ -60,8 +60,14 @@ defmodule Bag.Executor do
   def run_check(%Bag.CiBaton{} = b, freeze_path) do
     args = ["check", b.node, b.required_cap, b.check_id, freeze_path | b.command]
 
-    {output, code} =
-      System.cmd(@executor_path, args, cd: Path.expand("../../../", __DIR__), stderr_to_stdout: true)
+    # Pass artifact path via env var so the Zig host can hash the report after
+    # the check runs and include its digest in the frozen Baton envelope.
+    base_opts = [cd: Path.expand("../../../", __DIR__), stderr_to_stdout: true]
+    opts = if b.artifact_path,
+      do: Keyword.put(base_opts, :env, [{"BAG_ARTIFACT_PATH", b.artifact_path}]),
+      else: base_opts
+
+    {output, code} = System.cmd(@executor_path, args, opts)
 
     verdict =
       case code do

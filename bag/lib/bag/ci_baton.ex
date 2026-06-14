@@ -19,6 +19,7 @@ defmodule Bag.CiBaton do
     :command,
     :verdict,
     :exit_code,
+    artifact_path: nil,
     mutating: false,
     risk: :low
   ]
@@ -32,7 +33,8 @@ defmodule Bag.CiBaton do
           required_cap: String.t(),
           command: [String.t()],
           verdict: verdict(),
-          exit_code: integer() | nil
+          exit_code: integer() | nil,
+          artifact_path: String.t() | nil
         }
 
   @doc """
@@ -51,6 +53,7 @@ defmodule Bag.CiBaton do
       command: command,
       verdict: :pending,
       exit_code: nil,
+      artifact_path: Keyword.get(opts, :artifact_path),
       mutating: Keyword.get(opts, :mutating, false),
       risk: Keyword.get(opts, :risk, :low)
     }
