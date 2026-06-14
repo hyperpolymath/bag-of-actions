@@ -26,8 +26,14 @@ public export
 estate : List Node
 estate =
   [ MkNode "mesh-laptop"        [MacOS, Guix, TrustedHost "Jonathan", Zig] 2
-  , MkNode "mesh-server-1"      [Linux, GPU, Guix, TrustedHost "Core-Infrastructure", Zig, Rust, Cargo, Deno] 1
+  , MkNode "mesh-server-1"      [Linux, GPU, Guix, TrustedHost "Core-Infrastructure", Zig, Rust, Cargo, Deno, Scorecard, Wasm] 1
   , MkNode "mesh-github-runner" [Linux, SecretAccess "GitHub-Deploy-Token"] 100
+  -- The hypatia "brain" (Elixir merge-orchestration host): emits/reads only, and
+  -- deliberately has NO `SecretAccess` capability. A merge Baton requires
+  -- `SecretAccess`, so `cheapestCapable` can never select the brain for it — the
+  -- token-free-brain invariant proved as a capability fact: the Baton must
+  -- migrate to `mesh-github-runner`.
+  , MkNode "mesh-hypatia-brain" [Linux, TrustedHost "Jonathan"] 1
   ]
 
 ||| Lookup a node by name in the estate.

@@ -58,12 +58,18 @@ defmodule Bag.Mesh do
     valid_targets = Enum.filter(members, fn pid ->
       node_name = node_to_name(node(pid))
       # Translate requiredCap to string list for the Zig bridge
-      req_strings = Enum.map(baton.required_cap || [], fn 
+      req_strings = Enum.map(baton.required_cap || [], fn
         :guix -> "guix"
         :linux -> "linux"
         :macos -> "macos"
         :gpu -> "gpu"
         :trusted_host -> "trusted_host"
+        :zig -> "zig"
+        :rust -> "rust"
+        :cargo -> "cargo"
+        :deno -> "deno"
+        :scorecard -> "scorecard"
+        :wasm -> "wasm"
         _ -> "unknown"
       end)
       
@@ -98,6 +104,7 @@ defmodule Bag.Mesh do
   @impl true
   def handle_call({:submit_check, check_id, command, opts}, _from, state) do
     required_cap = Keyword.get(opts, :required_cap, "linux")
+    artifact_path = Keyword.get(opts, :artifact_path)
 
     freeze_path =
       Keyword.get(opts, :freeze_path, Path.join(System.tmp_dir!(), "#{check_id}.baton"))
@@ -114,7 +121,11 @@ defmodule Bag.Mesh do
         {:reply, {:suspended, nil, nil}, state}
 
       [node | _] ->
-        baton = CiBaton.new(check_id, command, node: node, required_cap: required_cap)
+        baton = CiBaton.new(check_id, command,
+          node: node,
+          required_cap: required_cap,
+          artifact_path: artifact_path
+        )
         IO.puts(:stderr, "Mesh: routing check #{check_id} → #{node} (cap: #{required_cap})")
         {verdict, updated, _output} = Executor.run_check(baton, freeze_path)
         IO.puts(:stderr, "Mesh: check #{check_id} verdict=#{verdict} on #{node} (0 GitHub minutes)")
@@ -133,7 +144,8 @@ defmodule Bag.Mesh do
             node: node,
             required_cap: spec.required_cap,
             mutating: Map.get(spec, :mutating, false),
-            risk: Map.get(spec, :risk, :low)
+            risk: Map.get(spec, :risk, :low),
+            artifact_path: Map.get(spec, :artifact_path)
           )
 
         freeze_path = Path.join(System.tmp_dir!(), "#{spec.check_id}.baton")

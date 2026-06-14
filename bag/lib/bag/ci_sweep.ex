@@ -17,7 +17,11 @@ defmodule Bag.CiSweep do
     results =
       Enum.map(checks, fn check ->
         cap = Map.get(check, :required_cap, "linux")
-        {verdict, node, _baton} = Mesh.submit_check(check.check_id, check.command, required_cap: cap)
+        artifact_path = Map.get(check, :artifact_path)
+        {verdict, node, _baton} = Mesh.submit_check(check.check_id, check.command,
+          required_cap: cap,
+          artifact_path: artifact_path
+        )
         %{check_id: check.check_id, verdict: verdict, node: node}
       end)
 
