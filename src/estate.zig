@@ -60,6 +60,17 @@ pub const estate = [_]Node{
         .capabilities = &[_]Capability{ .linux, .secret_access },
         .cost = 100,
     },
+    // The hypatia "brain": the Elixir merge-orchestration host. It emits/reads
+    // only — it deliberately LACKS `secret_access`, so a merge Baton (whose
+    // required_cap is `secret_access`) can never execute here and must migrate to
+    // `mesh-github-runner`. The token-free-brain invariant as a capability fact.
+    // Owned + cheap; cost is moot for merges (never feasible for secret_access
+    // work). Mirrors Estate.idr / nodes.scm.
+    .{
+        .name = "mesh-hypatia-brain",
+        .capabilities = &[_]Capability{ .linux, .trusted_host },
+        .cost = 1,
+    },
 };
 
 pub fn findNode(name: []const u8) ?Node {

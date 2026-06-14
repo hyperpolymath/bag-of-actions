@@ -19,7 +19,14 @@
     (owner . "Core-Infrastructure"))
   '((name . "mesh-github-runner")
     (capabilities . (linux secret-access))
-    (owner . "GitHub")))
+    (owner . "GitHub"))
+  ;; The hypatia "brain" (Elixir merge-orchestration host): emits/reads only and
+  ;; deliberately WITHOUT secret-access, so a merge Baton (required-cap
+  ;; secret-access) can never run here and must migrate to mesh-github-runner —
+  ;; the token-free-brain invariant. Mirrors src/estate.zig / Bag.Estate.idr.
+  '((name . "mesh-hypatia-brain")
+    (capabilities . (linux trusted-host))
+    (owner . "Jonathan")))
 
 ;; Note: In a production Guix System deployment, this would
 ;; be used to generate node-specific operating-system configurations.
