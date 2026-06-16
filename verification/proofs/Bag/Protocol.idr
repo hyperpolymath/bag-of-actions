@@ -24,6 +24,7 @@ data Capability
   | Deno
   | Scorecard
   | Wasm
+  | Nix
 
 public export
 Eq Capability where
@@ -39,6 +40,7 @@ Eq Capability where
   Deno == Deno = True
   Scorecard == Scorecard = True
   Wasm == Wasm = True
+  Nix == Nix = True
   _ == _ = False
 
 ||| Check if a node's provided capabilities satisfy the Baton's requirements.
@@ -65,3 +67,4 @@ capToTag Cargo            = 9
 capToTag Deno             = 10
 capToTag Scorecard        = 11
 capToTag Wasm             = 12
+capToTag Nix              = 13

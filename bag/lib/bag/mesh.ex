@@ -70,6 +70,7 @@ defmodule Bag.Mesh do
         :deno -> "deno"
         :scorecard -> "scorecard"
         :wasm -> "wasm"
+        :nix -> "nix"
         _ -> "unknown"
       end)
       
