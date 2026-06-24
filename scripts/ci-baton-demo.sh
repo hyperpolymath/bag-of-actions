@@ -28,8 +28,14 @@ $BIN check mesh-server-1 zig zig-fmt-clean "$FREEZE_DIR/cib-pass.txt" zig fmt --
 echo
 
 echo "=== (2) FAIL: a badly-formatted file (real, honest fail) ==="
-$BIN check mesh-server-1 zig zig-fmt-dirty "$FREEZE_DIR/cib-fail.txt" zig fmt --check src/estate.zig \
+# Negative fixture is GENERATED here (not a tracked source file) so it can never
+# rot to clean — src/estate.zig used to be this fixture and got formatted, making
+# the fail case silently pass.
+DIRTY="$FREEZE_DIR/cib-dirty.zig"
+printf 'const std=@import("std");\npub fn main()void{\n  _=std;\n}\n' > "$DIRTY"
+$BIN check mesh-server-1 zig zig-fmt-dirty "$FREEZE_DIR/cib-fail.txt" zig fmt --check "$DIRTY" \
   && echo "gate: PASS (exit 0)" || echo "gate: FAIL (exit $?)"
+rm -f "$DIRTY"
 echo
 
 echo "=== (3) SUSPENDED: required capability absent → work suspended, no minutes burned ==="
