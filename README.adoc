@@ -44,11 +44,11 @@ states that search for environments matching their required capabilities.
 
 | 3. Verified ABI
 | ✓ Complete
-| Idris 2 formal proofs for linear resource preservation.
+| Idris 2 formal proofs for linear resource preservation typecheck (`idris2 --typecheck bag.ipkg`). They are source-of-truth specs, not yet runtime-invoked — see link:EXPLAINME.adoc[].
 
 | 4. Guix Integration
 | ✓ Complete
-| Native Guix build orchestration via Zig FFIs.
+| Guix build orchestration from the Zig host (shelling out to the `guix` CLI; a direct daemon-socket interface is future work — see link:EXPLAINME.adoc[]).
 |===
 
 == Features

@@ -201,12 +201,42 @@ checker. Compile-time `Ephapax let!` linearity is a later milestone.
 ====
 **Dynamic Idris Linking**: The formal proofs (`Baton.idr`, `Estate.idr`,
 `Handoff.idr`, `Protocol.idr`) exist and typecheck
-(`idris2 --typecheck bag.ipkg`), but they are not yet invoked at runtime by the
-Elixir orchestrator. The `src/estate.zig` matcher is a hand-translation kept in
-step with `Estate.idr` by review, not by an automated bridge.
+(`idris2 --typecheck bag.ipkg`), but they remain *source-of-truth specifications*
+that are not yet invoked at runtime by the Elixir orchestrator. The
+`src/estate.zig` matcher is a hand-translation kept in step with `Estate.idr` by
+review, not by an automated bridge. A build-time conformance gate (mechanically
+checking the Zig/Elixir mirrors against the Idris spec) is *planned, not yet
+built*.
+====
+
+[CAUTION]
+====
+**Static estate manifest**: the node registry (`Estate.idr` / `src/estate.zig` /
+`nodes.scm`) is a static, hand-maintained list. There is no dynamic node
+attestation or join handshake yet — adding or removing a node means editing all
+three mirrors. Real-time manifest updates remain future work.
+====
+
+[CAUTION]
+====
+**Cross-machine Baton transport**: Batons freeze to / thaw from the local
+filesystem, and the demo exercises freeze→thaw within one host. The actual
+network transport that would carry a frozen Baton between physically separate
+machines is not yet built; "migration" today means a file handed to another
+process, not a Baton crossing a wire.
 ====
 
 == Resolved (previously-listed gaps now closed)
+
+[NOTE]
+====
+**Fail-closed verdict path**: an earlier doubt about the fail path was traced to
+a rotted test fixture (above), not a logic bug. The path is fail-closed: the Zig
+host sets `verdict = if (code == 0) .pass else .fail` (runner exit ≠ 0 ⇒ `fail`),
+and `Bag.GitHubBridge.state_for/1` maps only `:pass` to `success` — every other
+verdict reports non-green, so a check that did not truly pass can never silently
+satisfy a required status.
+====
 
 [NOTE]
 ====
@@ -238,4 +268,7 @@ manager; the `guix` capability is present across `Protocol.idr`,
 
 | `scripts/ci-baton-demo.sh`
 | A frozen verdict round-trips through `thaw` with HMAC + ed25519 verified, and a tampered envelope is REJECTED.
+
+| `bag/lib/bag/github_bridge.ex`
+| The verdict→status mapping is fail-closed: only `:pass` becomes `success`.
 |===
