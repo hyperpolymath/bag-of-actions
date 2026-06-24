@@ -2,6 +2,8 @@
 // Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
 const std = @import("std");
 const estate = @import("estate.zig");
+const crypto = @import("crypto.zig");
+const store = @import("store.zig");
 
 pub const Baton = struct {
     counter: i32,
@@ -145,13 +147,7 @@ pub const CheckBaton = struct {
         var mac: [HmacSha256.mac_length]u8 = undefined;
         HmacSha256.create(&mac, canon, key);
 
-        const hexchars = "0123456789abcdef";
-        var hex: [64]u8 = undefined;
-        for (mac, 0..) |byte, i| {
-            hex[i * 2] = hexchars[byte >> 4];
-            hex[i * 2 + 1] = hexchars[byte & 0x0f];
-        }
-        return hex;
+        return crypto.bytesToHex(HmacSha256.mac_length, mac);
     }
 
     /// Recompute the HMAC digest and compare it to the one in the envelope.
@@ -172,25 +168,17 @@ pub const CheckBaton = struct {
         const sig_bytes = sig.toBytes();
         const pk_bytes = kp.public_key.toBytes();
 
-        const hexchars = "0123456789abcdef";
-        var sig_hex: [128]u8 = undefined;
-        for (sig_bytes, 0..) |byte, i| {
-            sig_hex[i * 2] = hexchars[byte >> 4];
-            sig_hex[i * 2 + 1] = hexchars[byte & 0x0f];
-        }
-        var pk_hex: [64]u8 = undefined;
-        for (pk_bytes, 0..) |byte, i| {
-            pk_hex[i * 2] = hexchars[byte >> 4];
-            pk_hex[i * 2 + 1] = hexchars[byte & 0x0f];
-        }
-        return .{ .sig = sig_hex, .pubkey = pk_hex };
+        return .{
+            .sig = crypto.bytesToHex(sig_bytes.len, sig_bytes),
+            .pubkey = crypto.bytesToHex(pk_bytes.len, pk_bytes),
+        };
     }
 
     /// Sign the canonical string using the OpenSSH private key at `key_path`.
     /// Defaults to BAG_SIGN_KEY_PATH, falling back to ~/.ssh/id_ed25519_signing.
     /// Key must be unencrypted ed25519 (the estate signing key, NOT the auth key).
     pub fn signEd25519(self: CheckBaton, allocator: std.mem.Allocator, key_path: []const u8) !Ed25519Result {
-        const seed = try readEd25519Seed(allocator, key_path);
+        const seed = try crypto.readEd25519Seed(allocator, key_path);
         return self.signEd25519WithSeed(allocator, seed);
     }
 
@@ -202,9 +190,9 @@ pub const CheckBaton = struct {
         const pk_hex = self.signing_pubkey orelse return false;
 
         var sig_bytes: [64]u8 = undefined;
-        hexDecode(&sig_bytes, sig_hex[0..]) catch return false;
+        crypto.hexDecode(&sig_bytes, sig_hex[0..]) catch return false;
         var pk_bytes: [32]u8 = undefined;
-        hexDecode(&pk_bytes, pk_hex[0..]) catch return false;
+        crypto.hexDecode(&pk_bytes, pk_hex[0..]) catch return false;
 
         const canon = try self.canonicalString(allocator);
         defer allocator.free(canon);
@@ -370,112 +358,6 @@ pub const CheckBaton = struct {
     }
 };
 
-/// Hex-decode `hex` into `dst`; `dst.len * 2 == hex.len` must hold.
-fn hexDecode(dst: []u8, hex: []const u8) !void {
-    if (hex.len != dst.len * 2) return error.InvalidHexLength;
-    for (0..dst.len) |i| {
-        const hi = std.fmt.charToDigit(hex[i * 2], 16) catch return error.InvalidHex;
-        const lo = std.fmt.charToDigit(hex[i * 2 + 1], 16) catch return error.InvalidHex;
-        dst[i] = @as(u8, @intCast(hi)) << 4 | @as(u8, @intCast(lo));
-    }
-}
-
-/// Parse an unencrypted OpenSSH ed25519 private key file and return the 32-byte seed.
-/// Encrypted keys (cipher != "none") are rejected with EncryptedKeyNotSupported.
-fn readEd25519Seed(allocator: std.mem.Allocator, path: []const u8) ![32]u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    const pem = try file.readToEndAlloc(allocator, 8192);
-    defer allocator.free(pem);
-
-    // Strip PEM header/footer and concatenate base64 payload lines.
-    var b64: std.ArrayList(u8) = .empty;
-    defer b64.deinit(allocator);
-    var iter = std.mem.splitScalar(u8, pem, '\n');
-    while (iter.next()) |line| {
-        const t = std.mem.trim(u8, line, " \r\t");
-        if (t.len == 0 or std.mem.startsWith(u8, t, "-----")) continue;
-        try b64.appendSlice(allocator, t);
-    }
-
-    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(b64.items) catch return error.InvalidKeyFormat;
-    const decoded = try allocator.alloc(u8, decoded_len);
-    defer allocator.free(decoded);
-    try std.base64.standard.Decoder.decode(decoded, b64.items);
-
-    // Validate OpenSSH magic.
-    const magic = "openssh-key-v1\x00";
-    if (decoded.len < magic.len or !std.mem.startsWith(u8, decoded, magic)) return error.NotOpenSSHKey;
-    var pos: usize = magic.len;
-
-    // cipher name — must be "none" (unencrypted).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const cipher_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + cipher_len > decoded.len) return error.InvalidKeyFormat;
-    if (!std.mem.eql(u8, decoded[pos .. pos + cipher_len], "none")) return error.EncryptedKeyNotSupported;
-    pos += cipher_len;
-
-    // kdf name (skip).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const kdf_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + kdf_len > decoded.len) return error.InvalidKeyFormat;
-    pos += kdf_len;
-
-    // kdf options (skip).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const kdf_opts_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + kdf_opts_len > decoded.len) return error.InvalidKeyFormat;
-    pos += kdf_opts_len;
-
-    // nkeys (skip).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    pos += 4;
-
-    // public key blob (skip).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const pub_blob_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + pub_blob_len > decoded.len) return error.InvalidKeyFormat;
-    pos += pub_blob_len;
-
-    // private key blob length (skip — we parse the blob inline below).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    pos += 4;
-
-    // check1 == check2 (corruption guard).
-    if (pos + 8 > decoded.len) return error.InvalidKeyFormat;
-    if (!std.mem.eql(u8, decoded[pos .. pos + 4], decoded[pos + 4 .. pos + 8])) return error.KeyCorrupted;
-    pos += 8;
-
-    // key type.
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const kt_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + kt_len > decoded.len) return error.InvalidKeyFormat;
-    if (!std.mem.eql(u8, decoded[pos .. pos + kt_len], "ssh-ed25519")) return error.NotEd25519Key;
-    pos += kt_len;
-
-    // inner public key (skip).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const inner_pub_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + inner_pub_len > decoded.len) return error.InvalidKeyFormat;
-    pos += inner_pub_len;
-
-    // seed+pubkey field: 4-byte length (must be 64) + 32-byte seed + 32-byte pubkey.
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const sp_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (sp_len != 64 or pos + 32 > decoded.len) return error.InvalidKeyFormat;
-
-    var seed: [32]u8 = undefined;
-    @memcpy(&seed, decoded[pos..][0..32]);
-    return seed;
-}
-
 /// Parse an SSH ed25519 public key file (.pub) and return the 32-byte raw key.
 fn readEd25519Pubkey(allocator: std.mem.Allocator, path: []const u8) ![32]u8 {
     const file = try std.fs.cwd().openFile(path, .{});
@@ -510,31 +392,6 @@ fn readEd25519Pubkey(allocator: std.mem.Allocator, path: []const u8) ![32]u8 {
     var pubkey: [32]u8 = undefined;
     @memcpy(&pubkey, decoded[pos..][0..32]);
     return pubkey;
-}
-
-/// Compute a hex-encoded SHA-256 digest of the file at `path` using streaming
-/// reads so arbitrarily large report files (SARIF, SBOM, Scorecard JSON) do not
-/// need to fit in memory. Returns 64 hex chars in a `[64]u8`.
-fn hashFile(path: []const u8) ![64]u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    const Sha256 = std.crypto.hash.sha2.Sha256;
-    var hasher = Sha256.init(.{});
-    var buf: [8192]u8 = undefined;
-    while (true) {
-        const n = try file.read(&buf);
-        if (n == 0) break;
-        hasher.update(buf[0..n]);
-    }
-    var hash: [Sha256.digest_length]u8 = undefined;
-    hasher.final(&hash);
-    const hexchars = "0123456789abcdef";
-    var hex: [64]u8 = undefined;
-    for (hash, 0..) |byte, i| {
-        hex[i * 2] = hexchars[byte >> 4];
-        hex[i * 2 + 1] = hexchars[byte & 0x0f];
-    }
-    return hex;
 }
 
 /// The shared key used for HMAC attestation. Reads BAG_ATTEST_KEY; falls back
@@ -664,7 +521,7 @@ pub fn main() !void {
         else
             null;
         const wasm_digest_opt: ?[64]u8 = if (wasm_module_path) |wmp|
-            hashFile(wmp) catch null
+            crypto.hashFileSha256(wmp) catch null
         else
             null;
 
@@ -699,7 +556,7 @@ pub fn main() !void {
         const artifact_path_env = std.process.getEnvVarOwned(allocator, "BAG_ARTIFACT_PATH") catch null;
         defer if (artifact_path_env) |p| allocator.free(p);
         const artifact_sha256_opt: ?[64]u8 = if (artifact_path_env) |ap|
-            hashFile(ap) catch null
+            crypto.hashFileSha256(ap) catch null
         else
             null;
 
@@ -841,6 +698,14 @@ pub fn main() !void {
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
+
+// Pull the extracted modules' tests into this test binary. `crypto` is already
+// referenced throughout, but `store` is not yet wired into any code path, so this
+// keeps `zig build test` running its `atomicWrite` test until a later phase uses it.
+test {
+    std.testing.refAllDecls(crypto);
+    std.testing.refAllDecls(store);
+}
 
 test "CheckBaton freeze/thaw round-trips the verdict and verifies attestation" {
     const a = std.testing.allocator;
@@ -1152,17 +1017,6 @@ test "baton without ed25519 signature returns false from verifyEd25519 (not an e
     };
     // No signature present → false, not an error.
     try std.testing.expect(!try baton.verifyEd25519(a));
-}
-
-test "hexDecode round-trips known hex strings" {
-    var buf: [4]u8 = undefined;
-    try hexDecode(&buf, "deadbeef");
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xde, 0xad, 0xbe, 0xef }, &buf);
-}
-
-test "hexDecode rejects invalid hex chars" {
-    var buf: [2]u8 = undefined;
-    try std.testing.expectError(error.InvalidHex, hexDecode(&buf, "zz00"));
 }
 
 test "Capability.fromString recognises wasm (tag 12)" {
