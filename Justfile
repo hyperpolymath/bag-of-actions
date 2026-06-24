@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 #
-# RSR Standard Justfile Template
-# https://just.systems/man/en/
+# Bag-of-Actions task runner — https://just.systems/man/en/
 #
-# Copy this file to new projects and customize the placeholder values.
+# A capability-aware continuation mesh: Zig execution host, Elixir/OTP control
+# plane, Idris 2 verified ABI. This is the RSR Justfile with the project's real
+# build/test/release/estate recipes filled in; the estate machinery imports
+# (contractile, groove, assess, validate, proofs) and hooks are preserved.
 #
 # Run `just` to see all available recipes
 # Run `just cookbook` to generate docs/just-cookbook.adoc
@@ -18,10 +20,10 @@ set positional-arguments := true
 # Re-generate with: contractile gen-just
 import? "build/contractile.just"
 
-# Project metadata — customize these
-project := "rsr-template-repo"
+# Project metadata
+project := "bag-of-actions"
 OWNER := "hyperpolymath"
-REPO := "rsr-template-repo"
+REPO := "bag-of-actions"
 version := "0.1.0"
 tier := "infrastructure"  # 1 | 2 | infrastructure
 
@@ -80,110 +82,72 @@ import? "build/just/assess.just"
 # BUILD & COMPILE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Build the project (debug mode)
+# Build the project: Zig execution host (incl. WASI check modules) + Elixir.
 build *args:
-    @echo "Building {{project}} (debug)..."
-    # TODO: Replace with your build command
-    # Examples:
-    #   cargo build {{args}}                    # Rust
-    #   mix compile {{args}}                    # Elixir
-    #   zig build {{args}}                      # Zig
-    #   deno task build {{args}}                # Deno/ReScript
+    @echo "Building {{project}} (Zig host + Elixir control plane)..."
+    zig build {{args}}
+    cd bag && mix compile
     @echo "Build complete"
 
-# Build in release mode with optimizations
+# Build in release mode: optimised Zig host + Elixir release.
 build-release *args:
     @echo "Building {{project}} (release)..."
-    # TODO: Replace with your release build command
-    # Examples:
-    #   cargo build --release {{args}}
-    #   MIX_ENV=prod mix compile {{args}}
-    #   zig build -Doptimize=ReleaseFast {{args}}
-    @echo "Release build complete"
+    zig build -Doptimize=ReleaseSafe {{args}}
+    cd bag && MIX_ENV=prod mix compile
+    @echo "Release build complete (run `just release` to assemble the OTP release)"
 
-# Build and watch for changes (requires entr or similar)
-build-watch:
-    @echo "Watching for changes..."
-    # TODO: Customize file patterns for your language
-    # Examples:
-    #   find src -name '*.rs' | entr -c just build
-    #   mix compile --force --warnings-as-errors
-    #   deno task dev
+# Build only the WASI check modules into zig-out/lib/.
+build-wasm:
+    zig build wasm
 
-# Clean build artifacts [reversible: rebuild with `just build`]
+# Clean build artifacts [reversible: rebuild with `just build`].
+# NOTE: deliberately does NOT touch build/ — that holds estate machinery
+# (build/contractile.just and the imported build/just/*.just), not artifacts.
 clean:
-    @echo "Cleaning..."
-    # TODO: Customize for your build system
-    rm -rf target/ _build/ build/ dist/ out/ obj/ bin/
+    @echo "Cleaning build artifacts..."
+    rm -rf zig-out bag/_build verification/proofs/build
 
-# Deep clean including caches [reversible: rebuild]
+# Deep clean including the Zig cache [reversible: rebuild].
 clean-all: clean
-    rm -rf .cache .tmp
+    rm -rf .zig-cache
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TEST & QUALITY
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Run all tests
+# Run all tests: Zig unit tests + Elixir suite + Idris typecheck.
 test *args:
-    @echo "Running tests..."
-    # TODO: Replace with your test command
-    # Examples:
-    #   cargo test {{args}}
-    #   mix test {{args}}
-    #   zig build test {{args}}
-    #   deno test {{args}}
-    @echo "Tests passed!"
+    zig build test {{args}}
+    cd bag && mix test {{args}}
+    cd verification/proofs && idris2 --typecheck bag.ipkg
 
-# Run tests with verbose output
+# Run the Elixir suite with detailed (trace) output.
 test-verbose:
-    @echo "Running tests (verbose)..."
-    # TODO: Replace with verbose test command
+    cd bag && mix test --trace
 
-# Smoke test
-test-smoke:
-    @echo "Smoke test..."
-    # TODO: Add basic sanity checks
+# Smoke test: the Zig host responds and lists the estate roster.
+test-smoke: build
+    ./zig-out/bin/bag_of_actions nodes
 
-# Run end-to-end tests (full pipeline: build → run → verify)
-e2e:
-    @echo "Running E2E tests..."
-    # TODO: Replace with your E2E test command. Examples:
-    #   bash tests/e2e.sh                    # Shell-based E2E
-    #   npx playwright test                  # Browser E2E
-    #   mix test test/integration/e2e_test.exs  # Elixir E2E
-    #   cargo test --test end_to_end         # Rust E2E
-    @echo "E2E tests passed!"
+# Run the end-to-end demo: freeze a check on owned compute, thaw it, reject a
+# tamper (0 GitHub Actions minutes).
+e2e: build
+    ./scripts/ci-baton-demo.sh
 
-# Run aspect tests (cross-cutting concern validation)
-aspect:
-    @echo "Running aspect tests..."
-    # TODO: Replace with your aspect test command. Examples:
-    #   bash tests/aspect_tests.sh           # Shell-based aspect tests
-    #   cargo test --test aspects             # Rust aspect tests
-    # Aspect tests validate architectural invariants:
-    #   - Thread safety (mutex in FFI modules)
-    #   - ABI/FFI contract (declarations match exports)
-    #   - SPDX compliance (all files have license headers)
-    #   - No dangerous patterns (believe_me, assert_total, etc.)
-    @echo "Aspect tests passed!"
+# Run aspect tests (cross-cutting architectural invariants):
+#   - the Idris verified ABI still typechecks (spec well-typed),
+#   - the three estate manifests agree (just estate-sync),
+#   - formatting is clean (zig fmt + mix format).
+aspect: typecheck estate-sync fmt-check
+    @echo "Aspect invariants hold"
 
-# Run benchmarks (performance regression detection)
+# Benchmarks: not yet configured for this project.
 bench:
-    @echo "Running benchmarks..."
-    # TODO: Replace with your benchmark command. Examples:
-    #   cargo bench                           # Rust criterion
-    #   zig build bench                       # Zig benchmarks
-    #   mix run bench/benchmarks.exs          # Elixir benchee
-    #   deno bench                            # Deno bench
-    @echo "Benchmarks complete!"
+    @echo "No benchmark suite configured for {{project}} yet."
 
-# Run readiness tests (Component Readiness Grade: D/C/B)
+# Readiness tests: not yet configured for this project.
 readiness:
-    @echo "Running readiness tests..."
-    # TODO: Replace with your readiness test command. Examples:
-    #   cargo test --test readiness -- --nocapture
-    @echo "Readiness tests complete!"
+    @echo "No readiness suite configured for {{project}} yet."
 
 # Print the current CRG grade (reads from READINESS.md '**Current Grade:** X' line)
 crg-grade:
@@ -226,63 +190,42 @@ fix: fmt
 
 # Format all source files [reversible: git checkout]
 fmt:
-    @echo "Formatting source files..."
-    # TODO: Replace with your formatter
-    # Examples:
-    #   cargo fmt
-    #   mix format
-    #   gleam format
-    #   deno fmt
+    zig fmt src/ build.zig
+    cd bag && mix format
 
-# Check formatting without changes
+# Check formatting without changes (Zig + Elixir).
 fmt-check:
-    @echo "Checking formatting..."
-    # TODO: Replace with your format check
-    # Examples:
-    #   cargo fmt --check
-    #   mix format --check-formatted
-    #   gleam format --check
+    zig fmt --check src/ build.zig
+    cd bag && mix format --check-formatted
 
-# Run linter
+# Lint: Elixir warnings-as-errors compile (no credo dependency).
 lint:
-    @echo "Linting source files..."
-    # TODO: Replace with your linter
-    # Examples:
-    #   cargo clippy -- -D warnings
-    #   mix credo --strict
-    #   gleam check
+    cd bag && mix compile --warnings-as-errors
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # RUN & EXECUTE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Run the application
+# Run the Zig host CLI (e.g. `just run nodes`, `just run init`).
 run *args: build
-    # TODO: Replace with your run command
-    echo "Run not configured yet"
+    ./zig-out/bin/bag_of_actions {{args}}
 
-# Run with verbose output
-run-verbose *args: build
-    # TODO: Replace with verbose run command
-    echo "Run not configured yet"
+# Print the estate node list + tropical cost from the single mirrored manifest.
+nodes: build
+    ./zig-out/bin/bag_of_actions nodes
 
-# Install to user path
+# Install the Zig host binary to ~/.local/bin.
 install: build-release
-    @echo "Installing {{project}}..."
-    # TODO: Replace with your install command
+    @echo "Installing {{project}} to ~/.local/bin..."
+    install -Dm755 zig-out/bin/bag_of_actions ~/.local/bin/bag_of_actions
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPENDENCIES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Install/check all dependencies
+# Install/check all dependencies (Elixir; the Zig host is dependency-free).
 deps:
-    @echo "Checking dependencies..."
-    # TODO: Replace with your dependency check
-    # Examples:
-    #   cargo check
-    #   mix deps.get
-    #   gleam deps download
+    cd bag && mix deps.get
     @echo "All dependencies satisfied"
 
 # Audit dependencies for vulnerabilities
@@ -559,20 +502,16 @@ state-phase:
     @grep -oP 'phase\s*=\s*"\K[^"]+' .machine_readable/STATE.a2ml 2>/dev/null | head -1 || echo "unknown"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# GUIX & NIX
+# GUIX  (Guix is the sole estate package manager — Nix is banned)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Enter Guix development shell (primary)
+# Enter the Guix development shell.
 guix-shell:
     guix shell -D -f guix.scm
 
-# Build with Guix
+# Build with Guix.
 guix-build:
     guix build -f guix.scm
-
-# Enter Nix development shell (fallback)
-nix-shell:
-    @if [ -f "flake.nix" ]; then nix develop; else echo "No flake.nix"; fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # HYBRID AUTOMATION
@@ -655,6 +594,56 @@ release-tag version:
     echo "Created tag $TAG — push with: git push origin main --tags"
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# RELEASE & ESTATE INTEGRITY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Assemble a self-contained, fail-closed Elixir release (MIX_ENV=prod).
+# Boot refuses to start without a real BAG_ATTEST_KEY/GH_TOKEN/BAG_STATE_DIR
+# (see Bag.Config.validate!/0, gated to :prod in config/runtime.exs).
+release: build-release
+    cd bag && MIX_ENV=prod mix release --overwrite
+    @echo "Release assembled at bag/_build/prod/rel/bag"
+
+# estate-sync — the manual-sync footgun guard.
+# Verify the three estate manifests agree on the node roster:
+#   verification/proofs/Bag/Estate.idr  (formal ground truth)
+#   src/estate.zig                       (Zig host mirror)
+#   nodes.scm                            (Guix-native mirror)
+# Exits non-zero (with a diff) if any manifest lists a different set of nodes.
+estate-sync:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    idr=$(grep -oP 'MkNode "\K[^"]+' verification/proofs/Bag/Estate.idr | sort -u)
+    zig=$(grep -oP '\.name = "\Kmesh-[^"]+' src/estate.zig | sort -u)
+    scm=$(grep -oP '\(name \. "\Kmesh-[^"]+' nodes.scm | sort -u)
+    echo "Estate roster ($(echo "$idr" | wc -l) nodes):"; echo "$idr" | sed 's/^/  /'
+    fail=0
+    if [ "$idr" != "$zig" ]; then
+        echo "DRIFT: src/estate.zig roster differs from Estate.idr"
+        diff <(echo "$idr") <(echo "$zig") || true; fail=1
+    fi
+    if [ "$idr" != "$scm" ]; then
+        echo "DRIFT: nodes.scm roster differs from Estate.idr"
+        diff <(echo "$idr") <(echo "$scm") || true; fail=1
+    fi
+    [ "$fail" -eq 0 ] && echo "OK: all three estate manifests agree" \
+        || { echo "Reconcile the manifests before release."; exit 1; }
+
+# version — document (do NOT change) the four files that carry the release
+# version and must be kept in agreement by hand. Prints the current value of
+# each so drift is visible. Keep this list in step with any version bump.
+version:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    echo "Version-bearing files to keep in sync (current values):"
+    printf '  %-34s %s\n' "Justfile (version :=)"       "{{version}}"
+    printf '  %-34s %s\n' "bag/mix.exs"                 "$(grep -oP 'version:\s*"\K[^"]+' bag/mix.exs | head -1)"
+    printf '  %-34s %s\n' "build.zig.zon"               "$(grep -oP '\.version\s*=\s*"\K[^"]+' build.zig.zon | head -1)"
+    printf '  %-34s %s\n' "nodes.scm (header)"          "$(grep -oP ';;\s*[Vv]ersion:\s*\K\S+' nodes.scm | head -1 || echo '(no version line)')"
+    printf '  %-34s %s\n' ".machine_readable/6a2/STATE.a2ml" "$(grep -oP 'version\s*=\s*"\K[^"]+' .machine_readable/6a2/STATE.a2ml | head -1)"
+    echo "(This recipe is read-only — bump versions by hand, then re-run to confirm.)"
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # UTILITIES
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -679,19 +668,20 @@ assail:
     @command -v panic-attack >/dev/null 2>&1 && panic-attack assail . || echo "WARN: panic-attack not found — install from https://github.com/hyperpolymath/panic-attacker"
 
 
-# Self-diagnostic — checks dependencies, permissions, paths
+# Self-diagnostic — checks the toolchain this project needs.
 doctor:
-    @echo "Running diagnostics for rsr-template-repo..."
+    @echo "Running diagnostics for {{project}}..."
     @echo "Checking required tools..."
-    @command -v just >/dev/null 2>&1 && echo "  [OK] just" || echo "  [FAIL] just not found"
-    @command -v git >/dev/null 2>&1 && echo "  [OK] git" || echo "  [FAIL] git not found"
-    @echo "Checking for hardcoded paths..."
-    @grep -rn '$HOME\|$ECLIPSE_DIR' --include='*.rs' --include='*.ex' --include='*.res' --include='*.gleam' --include='*.sh' . 2>/dev/null | head -5 || echo "  [OK] No hardcoded paths"
+    @command -v just   >/dev/null 2>&1 && echo "  [OK] just"   || echo "  [FAIL] just not found"
+    @command -v git    >/dev/null 2>&1 && echo "  [OK] git"    || echo "  [FAIL] git not found"
+    @command -v zig    >/dev/null 2>&1 && echo "  [OK] zig"    || echo "  [FAIL] zig not found"
+    @command -v elixir >/dev/null 2>&1 && echo "  [OK] elixir" || echo "  [FAIL] elixir not found"
+    @command -v idris2 >/dev/null 2>&1 && echo "  [OK] idris2" || echo "  [WARN] idris2 not found (needed for the verified ABI)"
     @echo "Diagnostics complete."
 
 # Guided tour of key features
 tour:
-    @echo "=== rsr-template-repo Tour ==="
+    @echo "=== {{project}} Tour ==="
     @echo ""
     @echo "1. Project structure:"
     @ls -la
@@ -706,12 +696,12 @@ tour:
 
 # Open feedback channel with diagnostic context
 help-me:
-    @echo "=== rsr-template-repo Help ==="
+    @echo "=== {{project}} Help ==="
     @echo "Platform: $(uname -s) $(uname -m)"
     @echo "Shell: $SHELL"
     @echo ""
     @echo "To report an issue:"
-    @echo "  https://github.com/hyperpolymath/rsr-template-repo/issues/new"
+    @echo "  https://github.com/{{OWNER}}/{{REPO}}/issues/new"
     @echo ""
     @echo "Include the output of 'just doctor' in your report."
 
@@ -720,6 +710,10 @@ help-me:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 import? "build/just/proofs.just"
+
+# Typecheck the Idris 2 verified ABI (the formal spec must stay well-typed).
+typecheck:
+    cd verification/proofs && idris2 --typecheck bag.ipkg
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SESSION MANAGEMENT (THIN BINDINGS TO CENTRAL STANDARDS)
