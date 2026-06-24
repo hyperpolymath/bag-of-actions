@@ -75,6 +75,35 @@ Code Paths::
 * link:src/estate.zig[] — Zig implementation of the formal matcher.
 * link:bag/lib/bag/mesh.ex[] — Elixir routing logic using the verified bridge.
 
+=== Trust Attestation
+
+[quote, README.adoc]
+____
+Every frozen verdict carries an HMAC-SHA256 integrity digest, plus an optional
+ed25519 signature for authenticity; tampering is rejected on thaw.
+____
+
+How this is implemented::
+A `CheckBaton` freezes its verdict into a versioned text envelope
+(`BAG-CHECK-BATON v1`). The canonical string (id, check, node, capability,
+verdict, exit code, command, and optional artifact/wasm/tool-version fields) is
+HMAC-SHA256'd with the shared `BAG_ATTEST_KEY`. When a per-node signing key is
+available (`BAG_SIGN_KEY_PATH`, default `~/.ssh/id_ed25519_signing`) the same
+canonical string is also signed with ed25519. On `thaw`, both layers are
+re-checked and the verdict is REJECTED if either fails. Old envelopes without
+the ed25519 fields remain valid (backward compatible).
+
+Code Paths::
+* link:src/main.zig[] — `CheckBaton.freeze` / `thaw` / `verify` / `verifyEd25519`.
+* link:src/crypto.zig[] — leaf helpers (`bytesToHex`, `hexDecode`, `readEd25519Seed`, `hashFileSha256`).
+* link:scripts/ci-baton-demo.sh[] — end-to-end demo, including a tamper case that is rejected.
+
+Caveat::
+The HMAC key falls back to a documented dev placeholder when `BAG_ATTEST_KEY`
+is unset, so an unconfigured deployment is integrity-evident but not secret.
+ed25519 signing is best-effort: a Baton from a node without a signing key is
+HMAC-attested only (this is not treated as an error).
+
 === Guix-Powered Builds
 
 [quote, README.adoc]
@@ -148,17 +177,51 @@ in real-time as nodes join the mesh.
 
 == Known gaps
 
+These are the standing gaps between the README's prose and what the code does
+today. They are deliberately listed so the claims above are not read as more
+than they are.
+
 [CAUTION]
 ====
-**Linear Memory Dumps**: README claims "Mobile Wasm Contexts" but current 
-implementation only transfers the `counter` integer. True memory snapshotting 
-is tracked in Issue #3.
+**Linear Memory Dumps**: README describes "Mobile Wasm Contexts" but the current
+implementation transfers only the `counter` integer (via function arguments and
+CLI output), not a snapshot of the Wasm linear memory. True memory snapshotting
+remains future work.
 ====
 
 [CAUTION]
 ====
-**Dynamic Idris Linking**: The formal proofs exist in source but are not 
-yet invoked at runtime by the Elixir orchestrator.
+**Language-level linearity**: "Powered by Ephapax" describes the *model*, not a
+runtime dependency — there is no Ephapax code in `bag/lib`. One-time consumption
+is currently enforced by Elixir process isolation, not by an Ephapax type
+checker. Compile-time `Ephapax let!` linearity is a later milestone.
+====
+
+[CAUTION]
+====
+**Dynamic Idris Linking**: The formal proofs (`Baton.idr`, `Estate.idr`,
+`Handoff.idr`, `Protocol.idr`) exist and typecheck
+(`idris2 --typecheck bag.ipkg`), but they are not yet invoked at runtime by the
+Elixir orchestrator. The `src/estate.zig` matcher is a hand-translation kept in
+step with `Estate.idr` by review, not by an automated bridge.
+====
+
+== Resolved (previously-listed gaps now closed)
+
+[NOTE]
+====
+**Negative-fixture rot**: the `zig fmt` fail case once relied on a tracked
+source file (`src/estate.zig`) that got formatted, silently turning the "fail"
+case into a pass. The negative fixture is now *generated* inside
+`scripts/ci-baton-demo.sh` so it can never rot to clean.
+====
+
+[NOTE]
+====
+**Duplicate `nix` capability**: a `nix` capability added 2026-06-14 was removed
+2026-06-24 under the estate-wide Nix ban. Guix is the sole estate package
+manager; the `guix` capability is present across `Protocol.idr`,
+`src/estate.zig`, and `mesh.ex` (see link:docs/ci-report-to-github.adoc[]).
 ====
 
 == Evidence index
@@ -172,4 +235,7 @@ yet invoked at runtime by the Elixir orchestrator.
 
 | `bag/lib/bag/mesh.ex`
 | Process group members are tracked and work is delegated distributedly.
+
+| `scripts/ci-baton-demo.sh`
+| A frozen verdict round-trips through `thaw` with HMAC + ed25519 verified, and a tampered envelope is REJECTED.
 |===
