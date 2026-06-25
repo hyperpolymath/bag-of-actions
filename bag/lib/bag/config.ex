@@ -21,7 +21,10 @@ defmodule Bag.Config do
   @dev_placeholder_key "bag-of-actions-dev-key"
 
   # Minimum acceptable real key length, to catch empty/trivial values in prod.
-  @min_key_len 16
+  # Kept in lock-step with the Zig host's `min_attest_key_len` (src/main.zig): a
+  # key the Elixir side would accept but the Zig host rejects (or vice-versa) is a
+  # boot/runtime split-brain, so both require >= 32 bytes.
+  @min_key_len 32
 
   @doc "The HMAC attestation key (`BAG_ATTEST_KEY`), or `nil` if unset."
   @spec attest_key() :: String.t() | nil

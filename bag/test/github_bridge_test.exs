@@ -44,6 +44,8 @@ defmodule Bag.GitHubBridgeTest do
     assert String.length(String.replace_prefix(desc, "description=", "")) <= 140
   end
 
+  @verified %{mode: "prod", ed25519: :verified}
+
   test "report_sweep posts one status per check, mapping verdicts + contexts (fake runner)" do
     test_pid = self()
 
@@ -54,7 +56,8 @@ defmodule Bag.GitHubBridgeTest do
 
     sweep =
       {[
-         %{check_id: "snifs-proofs", verdict: :pass, node: "mesh-server-1"},
+         # the :pass carries verified-prod attestation, so its green is authorised
+         %{check_id: "snifs-proofs", verdict: :pass, node: "mesh-server-1", attestation: @verified},
          %{check_id: "snifs-abi", verdict: :fail, node: "mesh-server-1"}
        ], %{pass: 1, fail: 1}}
 
@@ -79,6 +82,57 @@ defmodule Bag.GitHubBridgeTest do
     runner = fn _cmd, _args -> {"gh: Not Found (HTTP 404)", 1} end
 
     assert {:error, {1, "gh: Not Found (HTTP 404)"}} =
+             GitHubBridge.report_check("o/r", "sha", "ctx", :pass,
+               attestation: @verified,
+               runner: runner
+             )
+  end
+
+  test "FAIL-CLOSED: a :pass without verified attestation is refused, never posted" do
+    test_pid = self()
+    runner = fn cmd, args -> send(test_pid, {:posted, cmd, args}); {"url", 0} end
+
+    # no attestation at all
+    assert {:refused, {:unverified_attestation, :none}} =
              GitHubBridge.report_check("o/r", "sha", "ctx", :pass, runner: runner)
+
+    # dev-mode attestation
+    assert {:refused, _} =
+             GitHubBridge.report_check("o/r", "sha", "ctx", :pass,
+               attestation: %{mode: "dev", ed25519: :verified},
+               runner: runner
+             )
+
+    # prod but unsigned
+    assert {:refused, _} =
+             GitHubBridge.report_check("o/r", "sha", "ctx", :pass,
+               attestation: %{mode: "prod", ed25519: :none},
+               runner: runner
+             )
+
+    # the runner must NOT have been called for any refused green
+    refute_received {:posted, _, _}
+  end
+
+  test "non-green verdicts post without needing attestation" do
+    runner = fn _cmd, _args -> {"url", 0} end
+    assert {:ok, "url"} = GitHubBridge.report_check("o/r", "sha", "ctx", :fail, runner: runner)
+    assert {:ok, "url"} = GitHubBridge.report_check("o/r", "sha", "ctx", :suspended, runner: runner)
+  end
+
+  test "verdict_attestation parses the Zig thaw output (prod + ed25519 verified)" do
+    out = """
+    VERDICT=pass
+    check_id=zig-fmt node=mesh-server-1 cap=zig exit_code=0
+    command=zig fmt --check build.zig
+    mode=prod
+    attestation=hmac:verified ed25519:verified
+    """
+
+    assert GitHubBridge.verdict_attestation(out) == %{mode: "prod", ed25519: :verified}
+
+    # a dev-mode / unsigned thaw is not greenlight-eligible
+    assert %{mode: "dev", ed25519: :none} =
+             GitHubBridge.verdict_attestation("VERDICT=pass\nmode=dev\nattestation=hmac:verified ed25519:none\n")
   end
 end
