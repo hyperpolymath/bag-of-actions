@@ -98,11 +98,16 @@ Code Paths::
 * link:src/crypto.zig[] — leaf helpers (`bytesToHex`, `hexDecode`, `readEd25519Seed`, `hashFileSha256`).
 * link:scripts/ci-baton-demo.sh[] — end-to-end demo, including a tamper case that is rejected.
 
-Caveat::
-The HMAC key falls back to a documented dev placeholder when `BAG_ATTEST_KEY`
-is unset, so an unconfigured deployment is integrity-evident but not secret.
-ed25519 signing is best-effort: a Baton from a node without a signing key is
-HMAC-attested only (this is not treated as an error).
+Attestation (fail-closed, envelope `v2`)::
+Both layers are *mandatory*. Freeze requires `BAG_ATTEST_KEY` (≥ 32 bytes — the old
+dev-key fallback is gone) *and* a usable ed25519 signing key, or the host refuses
+(exit `78`) and freezes nothing. Thaw accepts a verdict only if it is `v2`,
+HMAC-valid (under the key chosen by `key_id`), signed, and the signature verifies;
+an unsigned / HMAC-only / `v1` / wrong-`key_id` envelope is rejected
+(`VERDICT=tampered`, exit `3`). `mode` and `key_id` are bound into the canonical
+string, and the GitHub bridge greens a required check only for a
+`mode=prod` + `ed25519:verified` verdict — so a dev/laptop or forged verdict can
+never satisfy a required gate.
 
 === Guix-Powered Builds
 
