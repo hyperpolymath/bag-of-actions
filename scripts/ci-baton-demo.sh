@@ -14,8 +14,23 @@ cd "$(dirname "$0")/.."
 BIN=./zig-out/bin/bag_of_actions
 FREEZE_DIR="${TMPDIR:-/tmp}"
 
+# Phase 1 security: attestation is now fail-closed. A verdict can only be frozen
+# with a real shared key (>= 32 bytes) AND a per-node ed25519 signing key — there
+# is no dev-key fallback and signing is mandatory. Provide both for the demo.
+export BAG_ATTEST_KEY="${BAG_ATTEST_KEY:-bag-demo-attestation-key-0123456789abcdef}"  # 40 bytes
+DEMO_SIGN_KEY="$FREEZE_DIR/bag-demo-signing"
+if [ ! -f "$DEMO_SIGN_KEY" ]; then
+  ssh-keygen -t ed25519 -q -N "" -C bag-demo -f "$DEMO_SIGN_KEY"
+fi
+export BAG_SIGN_KEY_PATH="$DEMO_SIGN_KEY"
+
 echo "=== Building the Zig host ==="
 zig build
+echo
+
+echo "=== (0) FAIL-CLOSED: with no BAG_ATTEST_KEY the host refuses to attest (exit 78) ==="
+( unset BAG_ATTEST_KEY; $BIN check mesh-server-1 zig needs-key "$FREEZE_DIR/cib-nokey.txt" zig fmt --check build.zig ) \
+  && echo "UNEXPECTED: attested without a key" || echo "refused as designed (exit $?)"
 echo
 
 echo "=== Estate nodes (read from the single mirrored manifest) ==="
@@ -51,6 +66,14 @@ echo
 echo "=== (5) TAMPER: forge verdict=pass→fail in the frozen file, then thaw → REJECTED ==="
 sed 's/verdict=pass/verdict=fail/' "$FREEZE_DIR/cib-pass.txt" > "$FREEZE_DIR/cib-forged.txt"
 $BIN thaw "$FREEZE_DIR/cib-forged.txt" \
+  && echo "gate: PASS (exit 0)" || echo "gate: REJECTED (exit $?)"
+echo
+
+echo "=== (6) UNSIGNED: strip the ed25519 signature (HMAC-only) → thaw REJECTS ==="
+# This is the old forgeable-verdict hole: an unsigned envelope whose HMAC still
+# matches used to verify green. v2 makes the signature mandatory.
+grep -v '^signature=' "$FREEZE_DIR/cib-pass.txt" | grep -v '^signing_pubkey=' > "$FREEZE_DIR/cib-unsigned.txt"
+$BIN thaw "$FREEZE_DIR/cib-unsigned.txt" \
   && echo "gate: PASS (exit 0)" || echo "gate: REJECTED (exit $?)"
 echo
 
