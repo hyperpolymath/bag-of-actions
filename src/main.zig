@@ -2,6 +2,8 @@
 // Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
 const std = @import("std");
 const estate = @import("estate.zig");
+const crypto = @import("crypto.zig");
+const store = @import("store.zig");
 
 pub const Baton = struct {
     counter: i32,
@@ -83,6 +85,17 @@ pub const CheckBaton = struct {
     exit_code: i32,
     command: []const u8,
     digest: [64]u8 = [_]u8{'0'} ** 64,
+    /// Attestation mode this verdict was frozen under (BAG_MODE; default "prod").
+    /// Bound into the canonical string so it cannot be edited after freezing, and
+    /// surfaced on thaw so the GitHub bridge can refuse to green a non-prod verdict.
+    mode: []const u8 = "prod",
+    /// Identifier of the HMAC key used (BAG_ATTEST_KEY_ID; default "default").
+    /// Bound into the canonical string and used by thaw to select the verifying
+    /// key from the keyring, enabling overlap-window key rotation.
+    key_id: []const u8 = "default",
+    /// Envelope format version parsed from the header line. In-memory batons are
+    /// v2; a thawed v1 / unversioned envelope is rejected by `checkAttestation`.
+    version: u8 = 2,
     /// Path where the check wrote its report (metadata only — not attested directly).
     artifact_path: ?[]const u8 = null,
     /// Hex-encoded SHA-256 of the artifact file. Included in both HMAC and ed25519
@@ -111,12 +124,14 @@ pub const CheckBaton = struct {
     /// Build the canonical string that both HMAC and ed25519 sign over.
     /// Optional extensions are appended in a defined order; absent fields are omitted
     /// so old envelopes (which lack later extensions) remain valid.
-    /// Format: id|check_id|node|cap|verdict|exit|cmd[|sha256][|wasm:wasm_sha256][|tv:version]
+    /// Format: id|check_id|node|cap|verdict|exit|cmd|mode:M|kid:K[|sha256][|wasm:wasm_sha256][|tv:version]
+    /// `mode` and `kid` are mandatory in v2, so a v1 envelope (which lacks them)
+    /// can never produce a matching digest — dropping v1 acceptance cryptographically.
     pub fn canonicalString(self: CheckBaton, allocator: std.mem.Allocator) ![]u8 {
         var s = try std.fmt.allocPrint(
             allocator,
-            "{s}|{s}|{s}|{s}|{s}|{d}|{s}",
-            .{ self.id, self.check_id, self.node, @tagName(self.required_cap), @tagName(self.verdict), self.exit_code, self.command },
+            "{s}|{s}|{s}|{s}|{s}|{d}|{s}|mode:{s}|kid:{s}",
+            .{ self.id, self.check_id, self.node, @tagName(self.required_cap), @tagName(self.verdict), self.exit_code, self.command, self.mode, self.key_id },
         );
         if (self.artifact_sha256) |sha| {
             const prev = s;
@@ -145,13 +160,7 @@ pub const CheckBaton = struct {
         var mac: [HmacSha256.mac_length]u8 = undefined;
         HmacSha256.create(&mac, canon, key);
 
-        const hexchars = "0123456789abcdef";
-        var hex: [64]u8 = undefined;
-        for (mac, 0..) |byte, i| {
-            hex[i * 2] = hexchars[byte >> 4];
-            hex[i * 2 + 1] = hexchars[byte & 0x0f];
-        }
-        return hex;
+        return crypto.bytesToHex(HmacSha256.mac_length, mac);
     }
 
     /// Recompute the HMAC digest and compare it to the one in the envelope.
@@ -172,25 +181,17 @@ pub const CheckBaton = struct {
         const sig_bytes = sig.toBytes();
         const pk_bytes = kp.public_key.toBytes();
 
-        const hexchars = "0123456789abcdef";
-        var sig_hex: [128]u8 = undefined;
-        for (sig_bytes, 0..) |byte, i| {
-            sig_hex[i * 2] = hexchars[byte >> 4];
-            sig_hex[i * 2 + 1] = hexchars[byte & 0x0f];
-        }
-        var pk_hex: [64]u8 = undefined;
-        for (pk_bytes, 0..) |byte, i| {
-            pk_hex[i * 2] = hexchars[byte >> 4];
-            pk_hex[i * 2 + 1] = hexchars[byte & 0x0f];
-        }
-        return .{ .sig = sig_hex, .pubkey = pk_hex };
+        return .{
+            .sig = crypto.bytesToHex(sig_bytes.len, sig_bytes),
+            .pubkey = crypto.bytesToHex(pk_bytes.len, pk_bytes),
+        };
     }
 
     /// Sign the canonical string using the OpenSSH private key at `key_path`.
     /// Defaults to BAG_SIGN_KEY_PATH, falling back to ~/.ssh/id_ed25519_signing.
     /// Key must be unencrypted ed25519 (the estate signing key, NOT the auth key).
     pub fn signEd25519(self: CheckBaton, allocator: std.mem.Allocator, key_path: []const u8) !Ed25519Result {
-        const seed = try readEd25519Seed(allocator, key_path);
+        const seed = try crypto.readEd25519Seed(allocator, key_path);
         return self.signEd25519WithSeed(allocator, seed);
     }
 
@@ -202,9 +203,9 @@ pub const CheckBaton = struct {
         const pk_hex = self.signing_pubkey orelse return false;
 
         var sig_bytes: [64]u8 = undefined;
-        hexDecode(&sig_bytes, sig_hex[0..]) catch return false;
+        crypto.hexDecode(&sig_bytes, sig_hex[0..]) catch return false;
         var pk_bytes: [32]u8 = undefined;
-        hexDecode(&pk_bytes, pk_hex[0..]) catch return false;
+        crypto.hexDecode(&pk_bytes, pk_hex[0..]) catch return false;
 
         const canon = try self.canonicalString(allocator);
         defer allocator.free(canon);
@@ -216,6 +217,22 @@ pub const CheckBaton = struct {
         return true;
     }
 
+    /// Outcome of the full fail-closed attestation check applied on thaw.
+    pub const AttestResult = enum { ok, bad_version, bad_hmac, missing_sig, bad_sig };
+
+    /// Fail-closed attestation gate used on thaw: the envelope MUST be v2,
+    /// HMAC-valid under `key`, carry an ed25519 signature, and that signature MUST
+    /// verify. Any shortfall returns a specific non-`ok` result — never a soft pass.
+    /// This is the runtime end of "every envelope is v2 + ed25519-mandatory": an
+    /// unsigned or HMAC-only envelope can no longer discharge a verdict.
+    pub fn checkAttestation(self: CheckBaton, allocator: std.mem.Allocator, key: []const u8) !AttestResult {
+        if (self.version != 2) return .bad_version;
+        if (!try self.verify(allocator, key)) return .bad_hmac;
+        if (self.signature == null or self.signing_pubkey == null) return .missing_sig;
+        if (!try self.verifyEd25519(allocator)) return .bad_sig;
+        return .ok;
+    }
+
     /// Freeze the Baton (verdict + HMAC + optional ed25519 signature) to a versioned
     /// text envelope. Fields are appended in order so parsers that stop at `digest`
     /// remain compatible with older envelopes.
@@ -225,8 +242,8 @@ pub const CheckBaton = struct {
         defer file.close();
         const base = try std.fmt.allocPrint(
             allocator,
-            "BAG-CHECK-BATON v1\nid={s}\ncheck_id={s}\nnode={s}\nrequired_cap={s}\nverdict={s}\nexit_code={d}\ncommand={s}\ndigest=hmac-sha256:{s}\n",
-            .{ self.id, self.check_id, self.node, @tagName(self.required_cap), @tagName(self.verdict), self.exit_code, self.command, dh[0..] },
+            "BAG-CHECK-BATON v2\nid={s}\ncheck_id={s}\nnode={s}\nrequired_cap={s}\nmode={s}\nkey_id={s}\nverdict={s}\nexit_code={d}\ncommand={s}\ndigest=hmac-sha256:{s}\n",
+            .{ self.id, self.check_id, self.node, @tagName(self.required_cap), self.mode, self.key_id, @tagName(self.verdict), self.exit_code, self.command, dh[0..] },
         );
         defer allocator.free(base);
         try file.writeAll(base);
@@ -287,10 +304,20 @@ pub const CheckBaton = struct {
             .verdict = .pending,
             .exit_code = 0,
             .command = try allocator.dupe(u8, ""),
+            .mode = try allocator.dupe(u8, "prod"),
+            .key_id = try allocator.dupe(u8, "default"),
+            .version = 0, // unknown until the header line is parsed
         };
 
         var lines = std.mem.splitScalar(u8, content, '\n');
         while (lines.next()) |line| {
+            // Header line carries the envelope version; v1/unversioned ⇒ version 0/1,
+            // which checkAttestation rejects (and whose canonical string can't match).
+            if (std.mem.startsWith(u8, line, "BAG-CHECK-BATON v")) {
+                const vs = std.mem.trim(u8, line["BAG-CHECK-BATON v".len..], " \r\t");
+                b.version = std.fmt.parseInt(u8, vs, 10) catch 0;
+                continue;
+            }
             const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
             const k = line[0..eq];
             const val = line[eq + 1 ..];
@@ -312,6 +339,12 @@ pub const CheckBaton = struct {
             } else if (std.mem.eql(u8, k, "command")) {
                 allocator.free(b.command);
                 b.command = try allocator.dupe(u8, val);
+            } else if (std.mem.eql(u8, k, "mode")) {
+                allocator.free(b.mode);
+                b.mode = try allocator.dupe(u8, val);
+            } else if (std.mem.eql(u8, k, "key_id")) {
+                allocator.free(b.key_id);
+                b.key_id = try allocator.dupe(u8, val);
             } else if (std.mem.eql(u8, k, "digest")) {
                 const hex = if (std.mem.startsWith(u8, val, "hmac-sha256:")) val["hmac-sha256:".len..] else val;
                 const n = @min(hex.len, 64);
@@ -363,118 +396,14 @@ pub const CheckBaton = struct {
         allocator.free(self.check_id);
         allocator.free(self.node);
         allocator.free(self.command);
+        allocator.free(self.mode);
+        allocator.free(self.key_id);
         if (self.artifact_path) |ap| allocator.free(ap);
         if (self.wasm_path) |wp| allocator.free(wp);
         if (self.tool_version) |tv| allocator.free(tv);
         if (self.artifact_inline_b64) |b64| allocator.free(b64);
     }
 };
-
-/// Hex-decode `hex` into `dst`; `dst.len * 2 == hex.len` must hold.
-fn hexDecode(dst: []u8, hex: []const u8) !void {
-    if (hex.len != dst.len * 2) return error.InvalidHexLength;
-    for (0..dst.len) |i| {
-        const hi = std.fmt.charToDigit(hex[i * 2], 16) catch return error.InvalidHex;
-        const lo = std.fmt.charToDigit(hex[i * 2 + 1], 16) catch return error.InvalidHex;
-        dst[i] = @as(u8, @intCast(hi)) << 4 | @as(u8, @intCast(lo));
-    }
-}
-
-/// Parse an unencrypted OpenSSH ed25519 private key file and return the 32-byte seed.
-/// Encrypted keys (cipher != "none") are rejected with EncryptedKeyNotSupported.
-fn readEd25519Seed(allocator: std.mem.Allocator, path: []const u8) ![32]u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    const pem = try file.readToEndAlloc(allocator, 8192);
-    defer allocator.free(pem);
-
-    // Strip PEM header/footer and concatenate base64 payload lines.
-    var b64: std.ArrayList(u8) = .empty;
-    defer b64.deinit(allocator);
-    var iter = std.mem.splitScalar(u8, pem, '\n');
-    while (iter.next()) |line| {
-        const t = std.mem.trim(u8, line, " \r\t");
-        if (t.len == 0 or std.mem.startsWith(u8, t, "-----")) continue;
-        try b64.appendSlice(allocator, t);
-    }
-
-    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(b64.items) catch return error.InvalidKeyFormat;
-    const decoded = try allocator.alloc(u8, decoded_len);
-    defer allocator.free(decoded);
-    try std.base64.standard.Decoder.decode(decoded, b64.items);
-
-    // Validate OpenSSH magic.
-    const magic = "openssh-key-v1\x00";
-    if (decoded.len < magic.len or !std.mem.startsWith(u8, decoded, magic)) return error.NotOpenSSHKey;
-    var pos: usize = magic.len;
-
-    // cipher name — must be "none" (unencrypted).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const cipher_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + cipher_len > decoded.len) return error.InvalidKeyFormat;
-    if (!std.mem.eql(u8, decoded[pos .. pos + cipher_len], "none")) return error.EncryptedKeyNotSupported;
-    pos += cipher_len;
-
-    // kdf name (skip).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const kdf_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + kdf_len > decoded.len) return error.InvalidKeyFormat;
-    pos += kdf_len;
-
-    // kdf options (skip).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const kdf_opts_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + kdf_opts_len > decoded.len) return error.InvalidKeyFormat;
-    pos += kdf_opts_len;
-
-    // nkeys (skip).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    pos += 4;
-
-    // public key blob (skip).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const pub_blob_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + pub_blob_len > decoded.len) return error.InvalidKeyFormat;
-    pos += pub_blob_len;
-
-    // private key blob length (skip — we parse the blob inline below).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    pos += 4;
-
-    // check1 == check2 (corruption guard).
-    if (pos + 8 > decoded.len) return error.InvalidKeyFormat;
-    if (!std.mem.eql(u8, decoded[pos .. pos + 4], decoded[pos + 4 .. pos + 8])) return error.KeyCorrupted;
-    pos += 8;
-
-    // key type.
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const kt_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + kt_len > decoded.len) return error.InvalidKeyFormat;
-    if (!std.mem.eql(u8, decoded[pos .. pos + kt_len], "ssh-ed25519")) return error.NotEd25519Key;
-    pos += kt_len;
-
-    // inner public key (skip).
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const inner_pub_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (pos + inner_pub_len > decoded.len) return error.InvalidKeyFormat;
-    pos += inner_pub_len;
-
-    // seed+pubkey field: 4-byte length (must be 64) + 32-byte seed + 32-byte pubkey.
-    if (pos + 4 > decoded.len) return error.InvalidKeyFormat;
-    const sp_len = std.mem.readInt(u32, decoded[pos..][0..4], .big);
-    pos += 4;
-    if (sp_len != 64 or pos + 32 > decoded.len) return error.InvalidKeyFormat;
-
-    var seed: [32]u8 = undefined;
-    @memcpy(&seed, decoded[pos..][0..32]);
-    return seed;
-}
 
 /// Parse an SSH ed25519 public key file (.pub) and return the 32-byte raw key.
 fn readEd25519Pubkey(allocator: std.mem.Allocator, path: []const u8) ![32]u8 {
@@ -512,36 +441,111 @@ fn readEd25519Pubkey(allocator: std.mem.Allocator, path: []const u8) ![32]u8 {
     return pubkey;
 }
 
-/// Compute a hex-encoded SHA-256 digest of the file at `path` using streaming
-/// reads so arbitrarily large report files (SARIF, SBOM, Scorecard JSON) do not
-/// need to fit in memory. Returns 64 hex chars in a `[64]u8`.
-fn hashFile(path: []const u8) ![64]u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    const Sha256 = std.crypto.hash.sha2.Sha256;
-    var hasher = Sha256.init(.{});
-    var buf: [8192]u8 = undefined;
-    while (true) {
-        const n = try file.read(&buf);
-        if (n == 0) break;
-        hasher.update(buf[0..n]);
+/// Minimum acceptable length of a real shared HMAC key. Anything shorter is
+/// treated as unconfigured (the old dev placeholder was 20 bytes).
+const min_attest_key_len = 32;
+
+/// EX_CONFIG: the conventional sysexits.h code for a configuration error. Used
+/// for every fail-closed refusal so callers can distinguish "misconfigured" (78)
+/// from "tampered verdict" (3) and "honest fail" (1).
+const ex_config = 78;
+
+/// The active HMAC key for FREEZING. Fail-closed: requires BAG_ATTEST_KEY present
+/// and >= 32 bytes — there is NO dev-key fallback. A node that cannot prove it has
+/// a real shared secret must not attest anything.
+fn activeAttestKey(allocator: std.mem.Allocator) ![]const u8 {
+    const key = std.process.getEnvVarOwned(allocator, "BAG_ATTEST_KEY") catch {
+        std.debug.print("FATAL: BAG_ATTEST_KEY is unset — refusing to attest (no dev-key fallback).\n", .{});
+        std.process.exit(ex_config);
+    };
+    if (key.len < min_attest_key_len) {
+        std.debug.print("FATAL: BAG_ATTEST_KEY is too short ({d} < {d} bytes).\n", .{ key.len, min_attest_key_len });
+        std.process.exit(ex_config);
     }
-    var hash: [Sha256.digest_length]u8 = undefined;
-    hasher.final(&hash);
-    const hexchars = "0123456789abcdef";
-    var hex: [64]u8 = undefined;
-    for (hash, 0..) |byte, i| {
-        hex[i * 2] = hexchars[byte >> 4];
-        hex[i * 2 + 1] = hexchars[byte & 0x0f];
-    }
-    return hex;
+    return key;
 }
 
-/// The shared key used for HMAC attestation. Reads BAG_ATTEST_KEY; falls back
-/// to a documented dev placeholder (integrity-only until a real key is set).
-fn attestKey(allocator: std.mem.Allocator) ![]const u8 {
-    return std.process.getEnvVarOwned(allocator, "BAG_ATTEST_KEY") catch
-        try allocator.dupe(u8, "bag-of-actions-dev-key");
+/// The id of the active HMAC key (BAG_ATTEST_KEY_ID), default "default". Written
+/// into the envelope so thaw can select the matching verifying key during rotation.
+fn activeKeyId(allocator: std.mem.Allocator) ![]const u8 {
+    return std.process.getEnvVarOwned(allocator, "BAG_ATTEST_KEY_ID") catch
+        try allocator.dupe(u8, "default");
+}
+
+/// The attestation mode (BAG_MODE), default "prod". Bound into the verdict so a
+/// dev/laptop verdict carries `mode=dev` and the bridge can refuse to green it.
+fn currentMode(allocator: std.mem.Allocator) ![]const u8 {
+    return std.process.getEnvVarOwned(allocator, "BAG_MODE") catch
+        try allocator.dupe(u8, "prod");
+}
+
+/// A key_id can name a keyring file, so it must not be able to escape the keyring
+/// directory. Allow only `[A-Za-z0-9._-]`, non-empty, <= 128 chars, no `..`.
+/// Fail-closed: an invalid id resolves to no key, i.e. a rejected verdict.
+fn validKeyId(s: []const u8) bool {
+    if (s.len == 0 or s.len > 128) return false;
+    for (s) |c| {
+        const ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or c == '.' or c == '_' or c == '-';
+        if (!ok) return false;
+    }
+    return std.mem.indexOf(u8, s, "..") == null;
+}
+
+/// Resolve the verifying HMAC key for a given `key_id` when THAWING. Looks first
+/// in the keyring (`~/.config/bag/attest-keys/<key_id>`), then falls back to
+/// BAG_ATTEST_KEY when its id (BAG_ATTEST_KEY_ID, default "default") matches.
+/// Returns `null` (→ caller rejects as tampered) when the id is invalid or no key
+/// is found — never a soft pass, and never reading a file outside the keyring dir.
+fn attestKeyForId(allocator: std.mem.Allocator, key_id: []const u8) !?[]const u8 {
+    if (!validKeyId(key_id)) return null;
+
+    // 1. Keyring file (supports overlap-window rotation: old keys live on disk).
+    if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
+        defer allocator.free(home);
+        const path = try std.fmt.allocPrint(allocator, "{s}/.config/bag/attest-keys/{s}", .{ home, key_id });
+        defer allocator.free(path);
+        if (std.fs.cwd().openFile(path, .{})) |file| {
+            defer file.close();
+            const raw = try file.readToEndAlloc(allocator, 4096);
+            defer allocator.free(raw);
+            const trimmed = std.mem.trim(u8, raw, " \r\n\t");
+            if (trimmed.len >= min_attest_key_len) return try allocator.dupe(u8, trimmed);
+        } else |_| {}
+    } else |_| {}
+
+    // 2. Env fallback, only when the active key's id matches the requested one.
+    const active_id = std.process.getEnvVarOwned(allocator, "BAG_ATTEST_KEY_ID") catch
+        try allocator.dupe(u8, "default");
+    defer allocator.free(active_id);
+    if (std.mem.eql(u8, active_id, key_id)) {
+        if (std.process.getEnvVarOwned(allocator, "BAG_ATTEST_KEY")) |key| {
+            if (key.len >= min_attest_key_len) return key;
+            allocator.free(key);
+        } else |_| {}
+    }
+    return null;
+}
+
+/// Resolve the ed25519 signing key path: BAG_SIGN_KEY_PATH, else
+/// ~/.ssh/id_ed25519_signing. Returns null only when HOME is also unavailable.
+fn resolveSignKeyPath(allocator: std.mem.Allocator) ?[]u8 {
+    if (std.process.getEnvVarOwned(allocator, "BAG_SIGN_KEY_PATH")) |p| return p else |_| {}
+    const home = std.process.getEnvVarOwned(allocator, "HOME") catch return null;
+    defer allocator.free(home);
+    return std.fmt.allocPrint(allocator, "{s}/.ssh/id_ed25519_signing", .{home}) catch null;
+}
+
+/// Sign `baton` in place, or abort the process. Mandatory-ed25519 means a verdict
+/// that cannot be signed must never be frozen — there is no HMAC-only fallback.
+fn signOrExit(allocator: std.mem.Allocator, baton: *CheckBaton, sign_key_path: []const u8) void {
+    if (baton.signEd25519(allocator, sign_key_path)) |r| {
+        baton.signature = r.sig;
+        baton.signing_pubkey = r.pubkey;
+    } else |err| {
+        std.debug.print("FATAL: ed25519 signing failed ({s}) using key {s} — refusing to freeze an unsigned verdict.\n", .{ @errorName(err), sign_key_path });
+        std.process.exit(ex_config);
+    }
 }
 
 fn printOut(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
@@ -642,8 +646,20 @@ pub fn main() !void {
         const freeze_path = args[5];
         const cmd_argv = args[6..];
 
-        const key = try attestKey(allocator);
+        // Fail-closed attestation context: a real shared key (>= 32 bytes), a key
+        // id, a mode, and a usable ed25519 signing key are ALL required before any
+        // verdict (even a pending/suspended one) can be frozen.
+        const key = try activeAttestKey(allocator);
         defer allocator.free(key);
+        const key_id = try activeKeyId(allocator);
+        defer allocator.free(key_id);
+        const mode = try currentMode(allocator);
+        defer allocator.free(mode);
+        const sign_key_path = resolveSignKeyPath(allocator) orelse {
+            std.debug.print("FATAL: no ed25519 signing key (set BAG_SIGN_KEY_PATH or provide ~/.ssh/id_ed25519_signing).\n", .{});
+            std.process.exit(ex_config);
+        };
+        defer allocator.free(sign_key_path);
 
         // 1. Capability gate: only run on a node that satisfies the requirement.
         if (!estate.nodeSatisfies(node, &[_]estate.Capability{cap})) {
@@ -651,7 +667,8 @@ pub fn main() !void {
             // Freeze a pending Baton so the work can migrate to a capable node.
             const joined = try std.mem.join(allocator, " ", cmd_argv);
             defer allocator.free(joined);
-            const baton = CheckBaton{ .id = check_id, .check_id = check_id, .node = node, .required_cap = cap, .verdict = .pending, .exit_code = -1, .command = joined };
+            var baton = CheckBaton{ .id = check_id, .check_id = check_id, .node = node, .required_cap = cap, .verdict = .pending, .exit_code = -1, .command = joined, .mode = mode, .key_id = key_id };
+            signOrExit(allocator, &baton, sign_key_path);
             try baton.freeze(allocator, freeze_path, key);
             std.process.exit(2);
         }
@@ -664,7 +681,7 @@ pub fn main() !void {
         else
             null;
         const wasm_digest_opt: ?[64]u8 = if (wasm_module_path) |wmp|
-            hashFile(wmp) catch null
+            crypto.hashFileSha256(wmp) catch null
         else
             null;
 
@@ -699,7 +716,7 @@ pub fn main() !void {
         const artifact_path_env = std.process.getEnvVarOwned(allocator, "BAG_ARTIFACT_PATH") catch null;
         defer if (artifact_path_env) |p| allocator.free(p);
         const artifact_sha256_opt: ?[64]u8 = if (artifact_path_env) |ap|
-            hashFile(ap) catch null
+            crypto.hashFileSha256(ap) catch null
         else
             null;
 
@@ -733,6 +750,8 @@ pub fn main() !void {
             .verdict = verdict,
             .exit_code = code,
             .command = joined,
+            .mode = mode,
+            .key_id = key_id,
             .artifact_path = artifact_path_env,
             .artifact_sha256 = artifact_sha256_opt,
             .wasm_path = wasm_module_path,
@@ -741,26 +760,13 @@ pub fn main() !void {
             .artifact_inline_b64 = artifact_inline_b64_opt,
         };
 
-        // 7. Attempt ed25519 signing for authenticity-evident attestation.
-        //    Fail-open: if the key is absent or unreadable the Baton is still
-        //    HMAC-attested. Use BAG_SIGN_KEY_PATH or ~/.ssh/id_ed25519_signing
-        //    (the estate signing key; id_ed25519 is auth-only and must NOT be used).
-        const sign_key_path: ?[]u8 = blk: {
-            if (std.process.getEnvVarOwned(allocator, "BAG_SIGN_KEY_PATH")) |p| break :blk p else |_| {}
-            const home = std.process.getEnvVarOwned(allocator, "HOME") catch break :blk null;
-            defer allocator.free(home);
-            break :blk std.fmt.allocPrint(allocator, "{s}/.ssh/id_ed25519_signing", .{home}) catch null;
-        };
-        defer if (sign_key_path) |p| allocator.free(p);
+        // 7. Mandatory ed25519 signing for authenticity-evident attestation.
+        //    Fail-CLOSED: if the signing key is absent or unreadable the verdict is
+        //    NOT frozen (process aborts). Uses BAG_SIGN_KEY_PATH or the estate
+        //    signing key ~/.ssh/id_ed25519_signing (id_ed25519 is auth-only).
+        signOrExit(allocator, &baton, sign_key_path);
 
-        if (sign_key_path) |skp| {
-            if (baton.signEd25519(allocator, skp)) |ed_result| {
-                baton.signature = ed_result.sig;
-                baton.signing_pubkey = ed_result.pubkey;
-            } else |_| {} // key absent / unreadable → HMAC-only, not an error
-        }
-
-        // 8. Freeze (HMAC + ed25519 signature if signing succeeded).
+        // 8. Freeze (HMAC + mandatory ed25519 signature).
         try baton.freeze(allocator, freeze_path, key);
 
         const has_artifact = if (artifact_sha256_opt != null) "yes" else "no";
@@ -778,22 +784,29 @@ pub fn main() !void {
         var baton = try CheckBaton.thaw(allocator, args[2]);
         defer baton.deinit(allocator);
 
-        const key = try attestKey(allocator);
+        // Select the verifying key by the envelope's key_id (keyring + rotation).
+        // A missing/invalid key_id resolves to no key ⇒ rejected, never a soft pass.
+        const key = (try attestKeyForId(allocator, baton.key_id)) orelse {
+            try printOut(allocator, "VERDICT=tampered\ncheck_id={s}: no attestation key for key_id '{s}' — verdict REJECTED.\n", .{ baton.check_id, baton.key_id });
+            std.process.exit(3);
+        };
         defer allocator.free(key);
 
-        // Verify both attestation layers; reject if either fails.
-        const hmac_ok = try baton.verify(allocator, key);
-        const ed25519_ok = try baton.verifyEd25519(allocator);
-        const has_sig = baton.signature != null;
-        const ed25519_status: []const u8 = if (!has_sig) "none" else if (ed25519_ok) "verified" else "FAILED";
-
-        if (!hmac_ok or (has_sig and !ed25519_ok)) {
-            const reason: []const u8 = if (!hmac_ok) "hmac" else "ed25519";
+        // Fail-closed: must be v2, HMAC-valid, signed, and the signature must verify.
+        const attest = try baton.checkAttestation(allocator, key);
+        if (attest != .ok) {
+            const reason: []const u8 = switch (attest) {
+                .bad_version => "version (not v2)",
+                .bad_hmac => "hmac",
+                .missing_sig => "unsigned",
+                .bad_sig => "ed25519",
+                .ok => unreachable,
+            };
             try printOut(allocator, "VERDICT=tampered\ncheck_id={s}: attestation failed ({s}) — verdict REJECTED.\n", .{ baton.check_id, reason });
             std.process.exit(3);
         }
 
-        try printOut(allocator, "VERDICT={s}\ncheck_id={s} node={s} cap={s} exit_code={d}\ncommand={s}\nattestation=hmac:verified ed25519:{s}\n", .{ @tagName(baton.verdict), baton.check_id, baton.node, @tagName(baton.required_cap), baton.exit_code, baton.command, ed25519_status });
+        try printOut(allocator, "VERDICT={s}\ncheck_id={s} node={s} cap={s} exit_code={d}\ncommand={s}\nmode={s}\nattestation=hmac:verified ed25519:verified\n", .{ @tagName(baton.verdict), baton.check_id, baton.node, @tagName(baton.required_cap), baton.exit_code, baton.command, baton.mode });
         if (baton.tool_version) |tv| try printOut(allocator, "tool_version={s}\n", .{tv});
         if (baton.wasm_path) |wp| try printOut(allocator, "wasm_path={s}\n", .{wp});
         std.process.exit(if (baton.verdict == .pass) 0 else 1);
@@ -841,6 +854,14 @@ pub fn main() !void {
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
+
+// Pull the extracted modules' tests into this test binary. `crypto` is already
+// referenced throughout, but `store` is not yet wired into any code path, so this
+// keeps `zig build test` running its `atomicWrite` test until a later phase uses it.
+test {
+    std.testing.refAllDecls(crypto);
+    std.testing.refAllDecls(store);
+}
 
 test "CheckBaton freeze/thaw round-trips the verdict and verifies attestation" {
     const a = std.testing.allocator;
@@ -1046,10 +1067,10 @@ test "tampering with artifact_sha256 is detected on thaw" {
     try std.testing.expect(!try thawed.verify(a, key)); // tampered artifact sha → rejected
 }
 
-test "old envelope without artifact fields still verifies (backward compat)" {
+test "v2 envelope with no artifact fields still verifies (optional fields absent)" {
     const a = std.testing.allocator;
     const key = "test-key";
-    // No artifact_sha256 — uses the pre-artifact canonical string format.
+    // No artifact_sha256 — the optional extension is simply omitted.
     const original = CheckBaton{
         .id = "cib-compat-001",
         .check_id = "zig-fmt",
@@ -1152,17 +1173,6 @@ test "baton without ed25519 signature returns false from verifyEd25519 (not an e
     };
     // No signature present → false, not an error.
     try std.testing.expect(!try baton.verifyEd25519(a));
-}
-
-test "hexDecode round-trips known hex strings" {
-    var buf: [4]u8 = undefined;
-    try hexDecode(&buf, "deadbeef");
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xde, 0xad, 0xbe, 0xef }, &buf);
-}
-
-test "hexDecode rejects invalid hex chars" {
-    var buf: [2]u8 = undefined;
-    try std.testing.expectError(error.InvalidHex, hexDecode(&buf, "zz00"));
 }
 
 test "Capability.fromString recognises wasm (tag 12)" {
@@ -1283,7 +1293,7 @@ test "artifact_inline_b64 round-trips freeze/thaw" {
     try std.testing.expect(try thawed.verify(a, key));
 }
 
-test "old envelope without v2 fields still verifies (backward compat)" {
+test "v2 envelope with no extension fields still verifies (optional fields absent)" {
     const a = std.testing.allocator;
     const key = "test-key";
     const original = CheckBaton{
@@ -1306,4 +1316,177 @@ test "old envelope without v2 fields still verifies (backward compat)" {
     try std.testing.expect(thawed.tool_version == null);
     try std.testing.expect(thawed.artifact_inline_b64 == null);
     try std.testing.expect(try thawed.verify(a, key));
+}
+
+// ── Phase 1 security: v2 binding + mandatory ed25519 + key_id ─────────────────
+
+test "mode is bound into the canonical string (dev and prod verdicts differ)" {
+    const a = std.testing.allocator;
+    const key = "test-key";
+    const prod_b = CheckBaton{
+        .id = "cib-mode-001",
+        .check_id = "zig-fmt",
+        .node = "mesh-server-1",
+        .required_cap = .zig,
+        .verdict = .pass,
+        .exit_code = 0,
+        .command = "zig fmt --check build.zig",
+        .mode = "prod",
+    };
+    const dev_b = CheckBaton{
+        .id = "cib-mode-001",
+        .check_id = "zig-fmt",
+        .node = "mesh-server-1",
+        .required_cap = .zig,
+        .verdict = .pass,
+        .exit_code = 0,
+        .command = "zig fmt --check build.zig",
+        .mode = "dev",
+    };
+    const h1 = try prod_b.digestHex(a, key);
+    const h2 = try dev_b.digestHex(a, key);
+    // A dev verdict can never present the same HMAC as the prod one (quarantine).
+    try std.testing.expect(!std.mem.eql(u8, h1[0..], h2[0..]));
+}
+
+test "key_id is bound into the canonical string" {
+    const a = std.testing.allocator;
+    const key = "test-key";
+    const k1 = CheckBaton{
+        .id = "cib-kid-001",
+        .check_id = "zig-fmt",
+        .node = "mesh-server-1",
+        .required_cap = .zig,
+        .verdict = .pass,
+        .exit_code = 0,
+        .command = "zig fmt --check build.zig",
+        .key_id = "default",
+    };
+    const k2 = CheckBaton{
+        .id = "cib-kid-001",
+        .check_id = "zig-fmt",
+        .node = "mesh-server-1",
+        .required_cap = .zig,
+        .verdict = .pass,
+        .exit_code = 0,
+        .command = "zig fmt --check build.zig",
+        .key_id = "2026-06-rotation",
+    };
+    const h1 = try k1.digestHex(a, key);
+    const h2 = try k2.digestHex(a, key);
+    try std.testing.expect(!std.mem.eql(u8, h1[0..], h2[0..]));
+}
+
+test "checkAttestation accepts a signed v2 envelope" {
+    const a = std.testing.allocator;
+    const key = "test-key";
+    const seed = [_]u8{0x51} ** 32;
+    var original = CheckBaton{
+        .id = "cib-att-ok",
+        .check_id = "zig-fmt",
+        .node = "mesh-server-1",
+        .required_cap = .zig,
+        .verdict = .pass,
+        .exit_code = 0,
+        .command = "zig fmt --check build.zig",
+    };
+    const ed = try original.signEd25519WithSeed(a, seed);
+    original.signature = ed.sig;
+    original.signing_pubkey = ed.pubkey;
+    const path = "test-att-ok.txt";
+    try original.freeze(a, path, key);
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var thawed = try CheckBaton.thaw(a, path);
+    defer thawed.deinit(a);
+    try std.testing.expect(thawed.version == 2);
+    try std.testing.expect((try thawed.checkAttestation(a, key)) == .ok);
+}
+
+test "checkAttestation rejects an unsigned (HMAC-only) v2 envelope" {
+    const a = std.testing.allocator;
+    const key = "test-key";
+    // Freeze WITHOUT signing — a perfectly valid HMAC but no ed25519 signature.
+    const original = CheckBaton{
+        .id = "cib-att-unsigned",
+        .check_id = "zig-fmt",
+        .node = "mesh-server-1",
+        .required_cap = .zig,
+        .verdict = .pass,
+        .exit_code = 0,
+        .command = "zig fmt --check build.zig",
+    };
+    const path = "test-att-unsigned.txt";
+    try original.freeze(a, path, key);
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var thawed = try CheckBaton.thaw(a, path);
+    defer thawed.deinit(a);
+    try std.testing.expect(try thawed.verify(a, key)); // HMAC alone is fine...
+    try std.testing.expect((try thawed.checkAttestation(a, key)) == .missing_sig); // ...but rejected.
+}
+
+test "checkAttestation rejects a non-v2 (v1) envelope" {
+    const a = std.testing.allocator;
+    const key = "test-key";
+    var b = CheckBaton{
+        .id = "cib-att-v1",
+        .check_id = "zig-fmt",
+        .node = "mesh-server-1",
+        .required_cap = .zig,
+        .verdict = .pass,
+        .exit_code = 0,
+        .command = "zig fmt --check build.zig",
+    };
+    b.version = 1; // simulate a thawed legacy envelope
+    try std.testing.expect((try b.checkAttestation(a, key)) == .bad_version);
+}
+
+test "checkAttestation rejects a tampered verdict (bad hmac)" {
+    const a = std.testing.allocator;
+    const key = "test-key";
+    const seed = [_]u8{0x52} ** 32;
+    var original = CheckBaton{
+        .id = "cib-att-tamper",
+        .check_id = "zig-fmt",
+        .node = "mesh-server-1",
+        .required_cap = .zig,
+        .verdict = .fail,
+        .exit_code = 1,
+        .command = "zig fmt --check src/main.zig",
+    };
+    const ed = try original.signEd25519WithSeed(a, seed);
+    original.signature = ed.sig;
+    original.signing_pubkey = ed.pubkey;
+    const path = "test-att-tamper.txt";
+    try original.freeze(a, path, key);
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    // Forge verdict=fail → pass in the frozen envelope.
+    const content = blk: {
+        const rf = try std.fs.cwd().openFile(path, .{});
+        defer rf.close();
+        break :blk try rf.readToEndAlloc(a, 8192);
+    };
+    defer a.free(content);
+    const forged = try std.mem.replaceOwned(u8, a, content, "verdict=fail", "verdict=pass");
+    defer a.free(forged);
+    {
+        const f = try std.fs.cwd().createFile(path, .{});
+        defer f.close();
+        try f.writeAll(forged);
+    }
+
+    var thawed = try CheckBaton.thaw(a, path);
+    defer thawed.deinit(a);
+    try std.testing.expect((try thawed.checkAttestation(a, key)) == .bad_hmac);
+}
+
+test "validKeyId accepts plain ids and rejects path traversal" {
+    try std.testing.expect(validKeyId("default"));
+    try std.testing.expect(validKeyId("2026-06-rotation_1"));
+    try std.testing.expect(!validKeyId(""));
+    try std.testing.expect(!validKeyId("a/b"));
+    try std.testing.expect(!validKeyId("../../etc/passwd"));
+    try std.testing.expect(!validKeyId(".."));
 }

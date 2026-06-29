@@ -34,7 +34,7 @@ defmodule Bag.MeshCheckTest do
 
   test "Mesh reports a real fail verdict through the orchestrator" do
     assert {:fail, _node, baton} =
-             Mesh.submit_check("mesh-fail", ["zig", "fmt", "--check", "src/estate.zig"],
+             Mesh.submit_check("mesh-fail", ["zig", "fmt", "--check", dirty_fixture()],
                required_cap: "zig"
              )
 
@@ -59,7 +59,7 @@ defmodule Bag.MeshCheckTest do
   test "CiSweep runs a batch of checks and summarises verdicts" do
     checks = [
       %{check_id: "sweep-ok", command: ["zig", "fmt", "--check", "build.zig"], required_cap: "zig"},
-      %{check_id: "sweep-bad", command: ["zig", "fmt", "--check", "src/estate.zig"], required_cap: "zig"}
+      %{check_id: "sweep-bad", command: ["zig", "fmt", "--check", dirty_fixture()], required_cap: "zig"}
     ]
 
     {results, summary} = CiSweep.run(checks)
@@ -68,5 +68,15 @@ defmodule Bag.MeshCheckTest do
     assert summary[:pass] == 1
     assert summary[:fail] == 1
     refute CiSweep.all_passed?({results, summary})
+  end
+
+  # A deliberately mis-formatted Zig file written at RUNTIME. A tracked source
+  # file (src/estate.zig) was previously used as the negative fixture and got
+  # formatted clean, so every "should fail" assertion silently passed. Generated
+  # content cannot rot to clean.
+  defp dirty_fixture do
+    path = Path.join(System.tmp_dir!(), "bag_negtest_dirty.zig")
+    File.write!(path, ~s|const std=@import("std");\npub fn main()void{\n  _=std;\n}\n|)
+    path
   end
 end

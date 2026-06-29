@@ -44,21 +44,21 @@ states that search for environments matching their required capabilities.
 
 | 3. Verified ABI
 | ✓ Complete
-| Idris 2 formal proofs for linear resource preservation.
+| Idris 2 formal proofs for linear resource preservation typecheck (`idris2 --typecheck bag.ipkg`). They are source-of-truth specs, not yet runtime-invoked — see link:EXPLAINME.adoc[].
 
 | 4. Guix Integration
 | ✓ Complete
-| Native Guix build orchestration via Zig FFIs.
+| Guix build orchestration from the Zig host (shelling out to the `guix` CLI; a direct daemon-socket interface is future work — see link:EXPLAINME.adoc[]).
 |===
 
 == Features
 
-* *Linear Baton Logic* — Powered by **Ephapax**, ensuring one-time consumption of resources (tokens, memory, credits).
-* *Mobile Wasm Contexts* — Native state capture of WebAssembly modules for seamless migration.
+* *Linear Baton Logic* — Modelled on **Ephapax** linear types. In the current POC one-time consumption is enforced by the Elixir orchestrator (process isolation); language-level linearity is a Milestone 3+ goal (see link:EXPLAINME.adoc[]).
+* *Mobile Wasm Contexts* — State capture of WebAssembly execution via return values and CLI output; full linear-memory snapshotting is planned (see link:EXPLAINME.adoc[]).
 * *Guix-Powered Builds* — Integrated **Guix** orchestration for reproducible artifact creation during continuation steps.
-* *Formal Estate Manifest* — Verified mapping of infrastructure capabilities (Linux, MacOS, GPU, Guix) to physical nodes.
+* *Formal Estate Manifest* — Verified mapping of infrastructure capabilities (Linux, macOS, GPU, Guix) to physical nodes, mirrored across `Estate.idr`, `src/estate.zig`, and `nodes.scm`.
 * *Distributed Fault Tolerance* — Built on **Elixir/OTP**, leveraging the BEAM for robust node discovery and supervision.
-* *Trust Attestation* — Cryptographic proof-chain for every state transition (Milestone 3).
+* *Trust Attestation* — Every frozen verdict carries an HMAC-SHA256 integrity digest, plus an optional ed25519 signature (per-node key) for authenticity; tampering is rejected on thaw. See `src/main.zig` (`CheckBaton`) and link:docs/ci-check-baton.adoc[].
 
 == Quick start
 
@@ -104,8 +104,10 @@ Wondering how this works? See link:EXPLAINME.adoc[].
 == Documentation
 
 * link:EXPLAINME.adoc[EXPLAINME.adoc] — Implementation receipts and evidence index.
-* link:CONTRIBUTING.md[CONTRIBUTING.md] — How to add new capability matchers.
-* link:SECURITY.md[SECURITY.md] — Attestation and secret handling protocols.
+* link:GOVERNANCE.adoc[GOVERNANCE.adoc] — Project governance.
+* link:MAINTAINERS.adoc[MAINTAINERS.adoc] — Maintainers and contacts.
+* link:docs/ci-check-baton.adoc[docs/ci-check-baton.adoc] — How a CI check becomes a frozen, attested Baton.
+* link:.github/ISSUE_TEMPLATE[.github/ISSUE_TEMPLATE/] — Bug / feature / custom issue forms.
 
 == License
 

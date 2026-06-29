@@ -33,6 +33,10 @@ zig build
 
 == Status
 
-* *Milestone 1:* Local Baton Cycle (Completed)
-* *Milestone 2:* Elixir Mesh Orchestration (Completed)
-* *Milestone 3:* Verified ABI (Planned)
+* *Milestone 1:* Local Baton Cycle (Complete)
+* *Milestone 2:* Elixir Mesh Orchestration (Complete)
+* *Milestone 3:* Verified ABI — Idris 2 proofs typecheck (Complete; not yet invoked at runtime)
+* *Milestone 4:* Guix Integration via the Zig host (Complete)
+
+NOTE: This is the short summary. The authoritative status table, caveats, and
+the claim-to-implementation map live in link:README.adoc[] and link:EXPLAINME.adoc[].

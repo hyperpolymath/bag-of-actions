@@ -40,6 +40,7 @@ defmodule Mix.Tasks.Bag.Report do
 
     Enum.each(posts, fn
       {id, {:ok, url}} -> IO.puts("#{id}\tposted\t#{url}")
+      {id, {:refused, reason}} -> IO.puts(:stderr, "#{id}\tREFUSED\t#{inspect(reason)}")
       {id, {:error, reason}} -> IO.puts(:stderr, "#{id}\tPOST-FAILED\t#{inspect(reason)}")
     end)
 
@@ -47,10 +48,15 @@ defmodule Mix.Tasks.Bag.Report do
 
     green? = Bag.CiSweep.all_passed?({results, summary})
     posted? = Enum.all?(posts, &match?({_id, {:ok, _url}}, &1))
+    refused? = Enum.any?(posts, &match?({_id, {:refused, _}}, &1))
 
     cond do
       green? and posted? ->
         IO.puts(:stderr, "bag.report: ALL PASS + posted ✅")
+
+      refused? ->
+        IO.puts(:stderr, "bag.report: GREEN REFUSED — verdict not attested prod+ed25519 ❌")
+        exit({:shutdown, 1})
 
       not posted? ->
         IO.puts(:stderr, "bag.report: posted-with-errors ❌")

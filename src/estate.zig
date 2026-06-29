@@ -17,7 +17,6 @@ pub const Capability = enum(u32) {
     deno = 10,
     scorecard = 11,
     wasm = 12,
-    nix = 13,
 
     pub fn fromString(s: []const u8) ?Capability {
         if (std.mem.eql(u8, s, "linux")) return .linux;
@@ -32,7 +31,6 @@ pub const Capability = enum(u32) {
         if (std.mem.eql(u8, s, "deno")) return .deno;
         if (std.mem.eql(u8, s, "scorecard")) return .scorecard;
         if (std.mem.eql(u8, s, "wasm")) return .wasm;
-        if (std.mem.eql(u8, s, "nix")) return .nix;
         return null;
     }
 };
@@ -54,7 +52,7 @@ pub const estate = [_]Node{
     },
     .{
         .name = "mesh-server-1",
-        .capabilities = &[_]Capability{ .linux, .gpu, .guix, .trusted_host, .zig, .rust, .cargo, .deno, .scorecard, .wasm, .nix },
+        .capabilities = &[_]Capability{ .linux, .gpu, .guix, .trusted_host, .zig, .rust, .cargo, .deno, .scorecard, .wasm },
         .cost = 1,
     },
     .{

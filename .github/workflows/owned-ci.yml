@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
+#
+# Owned-compute CI bridge — Option A (thin GHA dispatcher).
+#
+# On a PR this job spends only a few SECONDS of GitHub Actions minutes: it SSHes to
+# an owned, `guix`-capable mesh node, which runs the bag-of-actions dogfood manifest
+# (ci-checks.exs) as Batons at ZERO further GitHub minutes and posts each verdict
+# back to the PR head commit as a status that satisfies a branch-protection required
+# check. This is bag-of-actions dissolving the GitHub Actions billing wall, on itself.
+#
+# REQUIRES (owner-provisioned — this workflow is a clean no-op until BOTH exist, so
+# merging the file is safe and changes nothing):
+#   * repo VARIABLE  BAG_NODE_HOST    — reachable host for the owned node, e.g.
+#                                       mesh-server-1.<your-host>  (Settings → Variables)
+#   * repo SECRET    BAG_NODE_SSH_KEY — private key authorised as bag@<BAG_NODE_HOST>
+#
+# The owned node must have: a checkout of this repo at ~/bag-of-actions, Elixir/mix,
+# zig, and a `gh` PAT (status:write) in its environment for Bag.GitHubBridge.
+#
+# Zero-GHA end state = Option B (an owned webhook receiver, no GHA workflow at all);
+# see docs/ci-report-to-github.adoc. Once trusted, retire the GitHub-hosted required
+# contexts and point branch protection at the bag-posted `bag/<check_id>` statuses.
+name: Owned-compute CI (bag bridge)
+
+on:
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owned-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Guard — skip cleanly if no owned node is provisioned
+        id: guard
+        env:
+          BAG_NODE_HOST: ${{ vars.BAG_NODE_HOST }}
+        run: |
+          if [ -z "${BAG_NODE_HOST:-}" ]; then
+            echo "::notice::BAG_NODE_HOST not set — owned-compute bridge not yet wired; skipping (no-op)."
+            echo "wired=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "wired=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the dogfood manifest on owned compute + report verdicts back
+        if: steps.guard.outputs.wired == 'true'
+        env:
+          SSH_KEY: ${{ secrets.BAG_NODE_SSH_KEY }}
+          NODE_HOST: ${{ vars.BAG_NODE_HOST }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/bag_node_key"
+          printf '%s\n' "$SSH_KEY" > "$key"
+          chmod 600 "$key"
+          ssh -i "$key" -o StrictHostKeyChecking=accept-new "bag@${NODE_HOST}" \
+            "set -euo pipefail; \
+             cd ~/bag-of-actions && git fetch --quiet origin && git checkout --quiet ${HEAD_SHA} && \
+             cd bag && \
+             GITHUB_REPOSITORY=${REPO} GITHUB_SHA=${HEAD_SHA} mix bag.report ../ci-checks.exs"
