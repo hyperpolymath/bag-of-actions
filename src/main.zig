@@ -1182,6 +1182,16 @@ test "Capability.fromString recognises wasm (tag 12)" {
     try std.testing.expect(@intFromEnum(cap.?) == 12);
 }
 
+test "Capability.fromString recognises Idris2 and Just toolchains" {
+    const idris2 = estate.Capability.fromString("idris2");
+    const just = estate.Capability.fromString("just");
+    try std.testing.expect(idris2 != null);
+    try std.testing.expect(just != null);
+    try std.testing.expect(idris2.? == .idris2);
+    try std.testing.expect(just.? == .just);
+    try std.testing.expect(estate.nodeSatisfies("mesh-server-1", &[_]estate.Capability{ .idris2, .just }));
+}
+
 test "wasm_digest extends canonical string and changes HMAC" {
     const a = std.testing.allocator;
     const key = "test-key";

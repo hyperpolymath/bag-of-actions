@@ -61,17 +61,23 @@ defmodule Bag.Executor do
   """
   def run_check(%Bag.CiBaton{} = b, freeze_path) do
     args = ["check", b.node, b.required_cap, b.check_id, freeze_path | b.command]
+    workdir = b.workdir || repo_root()
 
     # Pass artifact path via env var so the Zig host can hash the report after
     # the check runs and include its digest in the frozen Baton envelope.
-    base_opts = [cd: Path.expand("../../../", __DIR__), stderr_to_stdout: true]
+    base_opts = [cd: workdir, stderr_to_stdout: true]
 
     opts =
       if b.artifact_path,
         do: Keyword.put(base_opts, :env, [{"BAG_ARTIFACT_PATH", b.artifact_path}]),
         else: base_opts
 
-    {output, code} = System.cmd(executor_path(), args, opts)
+    {output, code} =
+      if Path.type(workdir) == :absolute and File.dir?(workdir) do
+        System.cmd(executor_path(), args, opts)
+      else
+        {"Bag.Executor: workdir must be an existing absolute directory: #{inspect(workdir)}", 126}
+      end
 
     verdict =
       case code do
@@ -81,7 +87,7 @@ defmodule Bag.Executor do
         _ -> :error
       end
 
-    {verdict, %{b | verdict: verdict, exit_code: code}, output}
+    {verdict, %{b | verdict: verdict, exit_code: code, freeze_path: freeze_path}, output}
   end
 
   @doc """
@@ -153,4 +159,6 @@ defmodule Bag.Executor do
       status: :floating
     }
   end
+
+  defp repo_root, do: Path.expand("../../../", __DIR__)
 end
