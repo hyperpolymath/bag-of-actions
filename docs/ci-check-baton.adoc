@@ -21,7 +21,7 @@ can carry mobile *CI work and its (tamper-evident) verdict*.
 |===
 | `check_id`     | names the check, e.g. `zig-fmt`
 | `command`      | the argv to run; `wasm://path` prefix triggers WASI execution via `wasmtime`
-| `required_cap` | the capability a node must have to run it (`linux`, `guix`, `zig`, `rust`, `cargo`, `deno`, `scorecard`, `wasm`, …)
+| `required_cap` | the capability a node must have to run it (`linux`, `guix`, `zig`, `rust`, `cargo`, `deno`, `scorecard`, `wasm`, `idris2`, `just`, …)
 | `node`         | the node the work is routed to
 | `verdict`      | `pending` (frozen, not yet run) / `pass` / `fail`
 | `exit_code`    | the executed check's exit status
@@ -120,10 +120,21 @@ cd bag && mix test                                   # 10 e2e tests
 {:pass, node, _baton} = Bag.Mesh.submit_check("zig-fmt", ["zig","fmt","--check","build.zig"], required_cap: "zig")
 
 # A whole sweep (the entry point hypatia/ci-health will call):
-checks = [%{check_id: "fmt", command: ["zig","fmt","--check","build.zig"], required_cap: "zig"}]
+checks = [%{check_id: "fmt", command: ["zig","fmt","--check","build.zig"], required_cap: "zig", workdir: "/srv/checkouts/project"}]
 {results, summary} = Bag.CiSweep.run(checks)
 Bag.CiSweep.all_passed?({results, summary})          # green/red for the sweep, 0 paid minutes
 ----
+
+`workdir` is optional and must be an existing absolute directory. It lets a
+Bag installation execute the target repository's own command surface without
+requiring Bag and the target checkout to share a repository root. After every
+executed check, `CiSweep` thaws the frozen envelope and attaches its verified
+attestation to the result. A reported green therefore comes from the signed
+envelope, not merely from the in-memory process exit code.
+
+Ordinary sweeps select the lowest-money-cost capable node deterministically.
+An equally capable paid GitHub runner therefore cannot be selected merely
+because its name happened to appear first in an unordered node map.
 
 Exit codes from the `check`/`thaw` subcommands double as a CI gate: `0` = pass,
 `1` = fail, `2` = suspended (no capable node), `3` = tampered (attestation failed).

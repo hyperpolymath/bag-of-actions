@@ -17,7 +17,7 @@
      (capabilities . (macos guix trusted-host))
      (owner . "Jonathan"))
    '((name . "mesh-server-1")
-     (capabilities . (linux gpu guix trusted-host))
+     (capabilities . (linux gpu guix trusted-host zig rust cargo deno scorecard wasm idris2 just))
      (owner . "Core-Infrastructure"))
    '((name . "mesh-github-runner")
      (capabilities . (linux secret-access))

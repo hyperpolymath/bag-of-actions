@@ -30,10 +30,9 @@ defmodule Bag.GitHubBridge do
       HMAC-only verdict, can never green a required gate. Non-green verdicts
       (`:fail`/`:error`/`:suspended`) need no attestation; they post as-is.
 
-  > Wiring note: until the mesh threads a per-verdict freeze path through to here
-  > (Phase 3, thaw-before-report), callers that cannot supply verified attestation
-  > will have their greens refused — the safe posture, since no live required check
-  > points at a bag status yet.
+  `Bag.CiSweep` thaws every executed envelope before reporting and threads the
+  parsed attestation into each result. Callers that construct result maps
+  themselves still fail closed when that proof is absent.
 
   Pure argv construction (`gh_command/5`) is separated from the side-effecting
   `report_check/5`, and the command runner is injectable (`:runner` opt), so the
@@ -56,7 +55,8 @@ defmodule Bag.GitHubBridge do
   Options: `:description`, `:target_url` (link to the attested verdict envelope),
   `:node` (folded into the default description).
   """
-  @spec gh_command(String.t(), String.t(), String.t(), atom(), keyword()) :: {String.t(), [String.t()]}
+  @spec gh_command(String.t(), String.t(), String.t(), atom(), keyword()) ::
+          {String.t(), [String.t()]}
   def gh_command(repo, head_sha, context, verdict, opts \\ []) do
     state = state_for(verdict)
 
@@ -101,7 +101,11 @@ defmodule Bag.GitHubBridge do
         _ -> nil
       end
 
-    ed = if String.contains?(thaw_output, "ed25519:verified"), do: :verified, else: :none
+    ed =
+      if Regex.match?(~r/(?:^|\s)ed25519:verified(?:\s|$)/m, thaw_output),
+        do: :verified,
+        else: :none
+
     %{mode: mode, ed25519: ed}
   end
 
@@ -141,7 +145,9 @@ defmodule Bag.GitHubBridge do
 
   Returns `[{check_id, {:ok, url} | {:error, reason}}]`.
   """
-  @spec report_sweep({[map()], map()}, keyword()) :: [{String.t(), {:ok, String.t()} | {:error, term()}}]
+  @spec report_sweep({[map()], map()}, keyword()) :: [
+          {String.t(), {:ok, String.t()} | {:error, term()}}
+        ]
   def report_sweep({results, _summary}, context_opts) do
     repo = Keyword.fetch!(context_opts, :repo)
     head_sha = Keyword.fetch!(context_opts, :head_sha)
