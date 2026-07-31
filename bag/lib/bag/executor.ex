@@ -6,7 +6,9 @@ defmodule Bag.Executor do
   """
   alias Bag.Baton
 
-  @executor_path Path.expand("../../../zig-out/bin/bag_of_actions", __DIR__)
+  # Resolved at runtime via Bag.Config so BAG_BIN can override the in-tree build
+  # output (e.g. inside a release). Falls back to repo-root zig-out/bin.
+  defp executor_path, do: Bag.Config.executor_path()
 
   @doc """
   Returns the estate node names, read from the single mirrored manifest
@@ -21,7 +23,7 @@ defmodule Bag.Executor do
   github-runner is expensive. Drives the planner's cheapest-capable routing.
   """
   def node_costs do
-    case System.cmd(@executor_path, ["nodes"], cd: Path.expand("../../../", __DIR__)) do
+    case System.cmd(executor_path(), ["nodes"], cd: Path.expand("../../../", __DIR__)) do
       {output, 0} ->
         output
         |> String.split("\n", trim: true)
@@ -43,7 +45,7 @@ defmodule Bag.Executor do
   def node_satisfies?(node_name, requirements) do
     args = ["match", node_name | requirements]
 
-    case System.cmd(@executor_path, args, cd: Path.expand("../../../", __DIR__)) do
+    case System.cmd(executor_path(), args, cd: Path.expand("../../../", __DIR__)) do
       {_output, 0} -> true
       {_output, _code} -> false
     end
@@ -59,15 +61,23 @@ defmodule Bag.Executor do
   """
   def run_check(%Bag.CiBaton{} = b, freeze_path) do
     args = ["check", b.node, b.required_cap, b.check_id, freeze_path | b.command]
+    workdir = b.workdir || repo_root()
 
     # Pass artifact path via env var so the Zig host can hash the report after
     # the check runs and include its digest in the frozen Baton envelope.
-    base_opts = [cd: Path.expand("../../../", __DIR__), stderr_to_stdout: true]
-    opts = if b.artifact_path,
-      do: Keyword.put(base_opts, :env, [{"BAG_ARTIFACT_PATH", b.artifact_path}]),
-      else: base_opts
+    base_opts = [cd: workdir, stderr_to_stdout: true]
 
-    {output, code} = System.cmd(@executor_path, args, opts)
+    opts =
+      if b.artifact_path,
+        do: Keyword.put(base_opts, :env, [{"BAG_ARTIFACT_PATH", b.artifact_path}]),
+        else: base_opts
+
+    {output, code} =
+      if Path.type(workdir) == :absolute and File.dir?(workdir) do
+        System.cmd(executor_path(), args, opts)
+      else
+        {"Bag.Executor: workdir must be an existing absolute directory: #{inspect(workdir)}", 126}
+      end
 
     verdict =
       case code do
@@ -77,7 +87,7 @@ defmodule Bag.Executor do
         _ -> :error
       end
 
-    {verdict, %{b | verdict: verdict, exit_code: code}, output}
+    {verdict, %{b | verdict: verdict, exit_code: code, freeze_path: freeze_path}, output}
   end
 
   @doc """
@@ -86,7 +96,7 @@ defmodule Bag.Executor do
   """
   def thaw_check(freeze_path) do
     {output, code} =
-      System.cmd(@executor_path, ["thaw", freeze_path],
+      System.cmd(executor_path(), ["thaw", freeze_path],
         cd: Path.expand("../../../", __DIR__),
         stderr_to_stdout: true
       )
@@ -110,7 +120,7 @@ defmodule Bag.Executor do
     save_baton_to_disk(baton)
 
     # 2. Run the Zig executor
-    case System.cmd(@executor_path, ["run"], cd: Path.expand("../../../", __DIR__)) do
+    case System.cmd(executor_path(), ["run"], cd: Path.expand("../../../", __DIR__)) do
       {output, 0} ->
         # 3. Reload the updated baton from disk
         updated_baton = load_baton_from_disk()
@@ -133,8 +143,8 @@ defmodule Bag.Executor do
   defp load_baton_from_disk() do
     content = File.read!(Path.expand("../../../baton.txt", __DIR__))
     [counter_str, module_cid, pkg_line, caps_line | _] = String.split(content, "\n", trim: true)
-    
-    required_cap = 
+
+    required_cap =
       if caps_line == "none" do
         []
       else
@@ -149,4 +159,6 @@ defmodule Bag.Executor do
       status: :floating
     }
   end
+
+  defp repo_root, do: Path.expand("../../../", __DIR__)
 end

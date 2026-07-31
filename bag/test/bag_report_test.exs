@@ -5,10 +5,10 @@ defmodule Mix.Tasks.Bag.ReportTest do
 
   test "context_map_from keeps only checks that declare :github_context" do
     checks = [
-      %{check_id: "snifs-proofs", command: ["x"], required_cap: "nix", github_context: "bag / Formal proofs (owned compute)"},
-      %{check_id: "snifs-abi", command: ["y"], required_cap: "nix", github_context: "bag / ABI conformance (owned compute)"},
+      %{check_id: "snifs-proofs", command: ["x"], required_cap: "guix", github_context: "bag / Formal proofs (owned compute)"},
+      %{check_id: "snifs-abi", command: ["y"], required_cap: "guix", github_context: "bag / ABI conformance (owned compute)"},
       # a check with no github_context falls through to the bag/<check_id> default
-      %{check_id: "extra", command: ["z"], required_cap: "nix"}
+      %{check_id: "extra", command: ["z"], required_cap: "guix"}
     ]
 
     assert Mix.Tasks.Bag.Report.context_map_from(checks) == %{

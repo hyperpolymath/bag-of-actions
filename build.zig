@@ -159,8 +159,15 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSmall,
         }),
     });
-    const wasm_step = b.step("wasm", "Build WASI check modules to zig-out/lib/");
-    wasm_step.dependOn(&b.addInstallArtifact(zig_fmt_wasm, .{
+    const install_wasm = b.addInstallArtifact(zig_fmt_wasm, .{
         .dest_dir = .{ .override = .{ .custom = "lib" } },
-    }).step);
+    });
+    const wasm_step = b.step("wasm", "Build WASI check modules to zig-out/lib/");
+    wasm_step.dependOn(&install_wasm.step);
+    // Also install the WASI check modules on the DEFAULT build so the dogfood
+    // manifest's `wasm://zig-out/lib/zig_fmt.wasm` check is runnable from a plain
+    // `zig build`. Previously the module only landed in zig-out/lib/ after an
+    // explicit `zig build wasm`, so a fresh build left the dogfood check unable
+    // to find it (verdict=fail, not because the source was dirty).
+    b.getInstallStep().dependOn(&install_wasm.step);
 }

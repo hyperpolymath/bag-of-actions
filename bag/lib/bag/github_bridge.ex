@@ -22,6 +22,17 @@ defmodule Bag.GitHubBridge do
       (`:fail` → `failure`, `:error` → `error`, `:suspended` → `failure`) is
       non-green, so a check that did not truly pass can never silently satisfy a
       *required* gate (a suspended check = no capable owned node = needs attention).
+    * **Fail-closed greening (Phase 1 security).** A `success` is posted ONLY when
+      the caller proves the verdict was attested in `mode=prod` with a verified
+      ed25519 signature, via the `:attestation` option (see `verdict_attestation/1`,
+      which parses the authoritative Zig `thaw` output). Without that proof a `:pass`
+      is **refused** — it is never posted — so a dev/laptop node, or an unsigned /
+      HMAC-only verdict, can never green a required gate. Non-green verdicts
+      (`:fail`/`:error`/`:suspended`) need no attestation; they post as-is.
+
+  `Bag.CiSweep` thaws every executed envelope before reporting and threads the
+  parsed attestation into each result. Callers that construct result maps
+  themselves still fail closed when that proof is absent.
 
   Pure argv construction (`gh_command/5`) is separated from the side-effecting
   `report_check/5`, and the command runner is injectable (`:runner` opt), so the
@@ -44,7 +55,8 @@ defmodule Bag.GitHubBridge do
   Options: `:description`, `:target_url` (link to the attested verdict envelope),
   `:node` (folded into the default description).
   """
-  @spec gh_command(String.t(), String.t(), String.t(), atom(), keyword()) :: {String.t(), [String.t()]}
+  @spec gh_command(String.t(), String.t(), String.t(), atom(), keyword()) ::
+          {String.t(), [String.t()]}
   def gh_command(repo, head_sha, context, verdict, opts \\ []) do
     state = state_for(verdict)
 
@@ -76,19 +88,50 @@ defmodule Bag.GitHubBridge do
   end
 
   @doc """
-  Post one verdict as a commit status. Returns `{:ok, status_url}` or
-  `{:error, {exit_code, output}}`. Pass `:runner` (a `fn cmd, args -> {out, code} end`)
-  to intercept the shell-out (defaults to the real `gh`).
+  Parse the authoritative Zig `thaw` output into an attestation descriptor
+  `%{mode: String.t() | nil, ed25519: :verified | :none}`. Only a verdict whose
+  envelope thawed to `mode=prod` with `ed25519:verified` is eligible to green a
+  required check (see `report_check/5`). Pure — unit-tested.
+  """
+  @spec verdict_attestation(String.t()) :: %{mode: String.t() | nil, ed25519: :verified | :none}
+  def verdict_attestation(thaw_output) when is_binary(thaw_output) do
+    mode =
+      case Regex.run(~r/^mode=(\S+)$/m, thaw_output) do
+        [_, m] -> m
+        _ -> nil
+      end
+
+    ed =
+      if Regex.match?(~r/(?:^|\s)ed25519:verified(?:\s|$)/m, thaw_output),
+        do: :verified,
+        else: :none
+
+    %{mode: mode, ed25519: ed}
+  end
+
+  @doc """
+  Post one verdict as a commit status. Returns `{:ok, status_url}`,
+  `{:error, {exit_code, output}}`, or — when a `:pass` lacks verified-prod
+  attestation — `{:refused, {:unverified_attestation, attestation}}` **without
+  posting** (fail-closed). Pass `:attestation` (from `verdict_attestation/1`) to
+  authorise a green, and `:runner` (a `fn cmd, args -> {out, code} end`) to
+  intercept the shell-out (defaults to the real `gh`).
   """
   @spec report_check(String.t(), String.t(), String.t(), atom(), keyword()) ::
-          {:ok, String.t()} | {:error, {integer(), String.t()}}
+          {:ok, String.t()} | {:error, {integer(), String.t()}} | {:refused, term()}
   def report_check(repo, head_sha, context, verdict, opts \\ []) do
-    {cmd, args} = gh_command(repo, head_sha, context, verdict, opts)
-    runner = Keyword.get(opts, :runner, &default_runner/2)
+    attestation = Keyword.get(opts, :attestation)
 
-    case runner.(cmd, args) do
-      {out, 0} -> {:ok, String.trim(out)}
-      {out, code} -> {:error, {code, String.trim(out)}}
+    if state_for(verdict) == "success" and not verified_prod?(attestation) do
+      {:refused, {:unverified_attestation, attestation || :none}}
+    else
+      {cmd, args} = gh_command(repo, head_sha, context, verdict, opts)
+      runner = Keyword.get(opts, :runner, &default_runner/2)
+
+      case runner.(cmd, args) do
+        {out, 0} -> {:ok, String.trim(out)}
+        {out, code} -> {:error, {code, String.trim(out)}}
+      end
     end
   end
 
@@ -102,7 +145,9 @@ defmodule Bag.GitHubBridge do
 
   Returns `[{check_id, {:ok, url} | {:error, reason}}]`.
   """
-  @spec report_sweep({[map()], map()}, keyword()) :: [{String.t(), {:ok, String.t()} | {:error, term()}}]
+  @spec report_sweep({[map()], map()}, keyword()) :: [
+          {String.t(), {:ok, String.t()} | {:error, term()}}
+        ]
   def report_sweep({results, _summary}, context_opts) do
     repo = Keyword.fetch!(context_opts, :repo)
     head_sha = Keyword.fetch!(context_opts, :head_sha)
@@ -111,13 +156,19 @@ defmodule Bag.GitHubBridge do
 
     Enum.map(results, fn r ->
       context = Map.get(context_map, r.check_id, "bag/#{r.check_id}")
-      opts = [node: r.node]
+      # Per-result attestation drives the fail-closed green; absent ⇒ green refused.
+      opts = [node: r.node, attestation: Map.get(r, :attestation)]
       opts = if runner, do: Keyword.put(opts, :runner, runner), else: opts
       {r.check_id, report_check(repo, head_sha, context, r.verdict, opts)}
     end)
   end
 
   # ── internals ──────────────────────────────────────────────────────────────
+
+  # A green is authorised only by a verdict attested in prod mode with a verified
+  # ed25519 signature. Anything else (dev mode, unsigned, missing) fails closed.
+  defp verified_prod?(%{mode: "prod", ed25519: :verified}), do: true
+  defp verified_prod?(_), do: false
 
   defp default_runner(cmd, args), do: System.cmd(cmd, args, stderr_to_stdout: true)
 
