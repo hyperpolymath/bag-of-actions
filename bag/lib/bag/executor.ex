@@ -40,6 +40,35 @@ defmodule Bag.Executor do
   end
 
   @doc """
+  Returns the estate node names, read from the single mirrored manifest
+  (`estate.zig` ← `verification/proofs/Bag/Estate.idr`) via the Zig host — so the
+  orchestrator never keeps its own copy of the node list to drift out of step.
+  """
+  def list_nodes, do: Map.keys(node_costs())
+
+  @doc """
+  Returns `%{node_name => cost}` — the tropical (min-plus) money grade of each
+  node, read from the same mirrored manifest. Owned nodes are cheap; the paid
+  github-runner is expensive. Drives the planner's cheapest-capable routing.
+  """
+  def node_costs do
+    case System.cmd(@executor_path, ["nodes"], cd: Path.expand("../../../", __DIR__)) do
+      {output, 0} ->
+        output
+        |> String.split("\n", trim: true)
+        |> Map.new(fn line ->
+          case String.split(line, "\t") do
+            [name, cost] -> {name, String.to_integer(cost)}
+            [name] -> {name, 0}
+          end
+        end)
+
+      {_output, _code} ->
+        %{}
+    end
+  end
+
+  @doc """
   Checks if a node satisfies the required capabilities using the Idris-to-Zig bridge.
   """
   def node_satisfies?(node_name, requirements) do
