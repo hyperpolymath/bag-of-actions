@@ -34,12 +34,22 @@ defmodule Bag.CiBatonTest do
   end
 
   test "a badly-formatted file FAILS the check and freezes a fail verdict", %{freeze: freeze} do
-    baton = CiBaton.new("zig-fmt-dirty", ["zig", "fmt", "--check", "src/estate.zig"])
+    baton = CiBaton.new("zig-fmt-dirty", ["zig", "fmt", "--check", dirty_fixture()])
 
     assert {:fail, updated, _output} = Executor.run_check(baton, freeze)
     assert updated.verdict == :fail
     assert updated.exit_code == 1
     assert File.read!(freeze) =~ "verdict=fail"
+  end
+
+  # A deliberately mis-formatted Zig file written at RUNTIME. Using a tracked
+  # source file (src/estate.zig) as the negative fixture is how this rotted:
+  # the file got formatted, so every "should fail" case silently passed.
+  # Generated content cannot rot to clean.
+  defp dirty_fixture do
+    path = Path.join(System.tmp_dir!(), "bag_negtest_dirty.zig")
+    File.write!(path, ~s|const std=@import("std");\npub fn main()void{\n  _=std;\n}\n|)
+    path
   end
 
   test "a check is SUSPENDED (not failed) when no node has the capability", %{freeze: freeze} do

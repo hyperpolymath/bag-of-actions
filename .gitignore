@@ -1,0 +1,25 @@
+# Build artifacts — never tracked. This is a polylingual repo
+# (Zig host, Elixir orchestrator, Idris 2 proofs, Guix builds).
+
+# Zig
+.zig-cache/
+zig-out/
+
+# Elixir / Mix
+/bag/_build/
+/bag/deps/
+/bag/cover/
+/bag/doc/
+/bag/.elixir_ls/
+erl_crash.dump
+*.ez
+
+# Idris 2
+verification/proofs/build/
+*.ibc
+*.ttc
+*.ttm
+
+# Editor / OS
+*~
+.DS_Store

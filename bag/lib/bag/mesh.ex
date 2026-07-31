@@ -19,7 +19,8 @@ defmodule Bag.Mesh do
   manifest, capability-matching via the Idris-to-Zig bridge), runs the check
   there, and freezes an attested verdict — with ZERO GitHub Actions minutes.
 
-  Options: `:required_cap` (default "linux"), `:freeze_path`.
+  Options: `:required_cap` (default "linux"), `:freeze_path`, `:workdir`
+  (an existing absolute directory), and `:artifact_path`.
   Returns `{verdict, node, baton}` where verdict is
   `:pass | :fail | :suspended | :tampered | :error` (`node` is nil if suspended).
   """
@@ -51,28 +52,38 @@ defmodule Bag.Mesh do
   defp route_baton(baton) do
     # 1. Get all members in the mesh
     members = :pg.get_members(:bag_mesh)
-    
+
     # 2. Filter members based on their node name and the Baton's requirements
     # For this POC, we assume the node name is the Elixir sname (e.g. mesh-laptop)
     # In a production system, this would be an attested identity.
-    valid_targets = Enum.filter(members, fn pid ->
-      node_name = node_to_name(node(pid))
-      # Translate requiredCap to string list for the Zig bridge
-      req_strings = Enum.map(baton.required_cap || [], fn 
-        :guix -> "guix"
-        :linux -> "linux"
-        :macos -> "macos"
-        :gpu -> "gpu"
-        :trusted_host -> "trusted_host"
-        _ -> "unknown"
+    valid_targets =
+      Enum.filter(members, fn pid ->
+        node_name = node_to_name(node(pid))
+        # Translate requiredCap to string list for the Zig bridge
+        req_strings =
+          Enum.map(baton.required_cap || [], fn
+            :guix -> "guix"
+            :linux -> "linux"
+            :macos -> "macos"
+            :gpu -> "gpu"
+            :trusted_host -> "trusted_host"
+            :zig -> "zig"
+            :rust -> "rust"
+            :cargo -> "cargo"
+            :deno -> "deno"
+            :scorecard -> "scorecard"
+            :wasm -> "wasm"
+            :idris2 -> "idris2"
+            :just -> "just"
+            _ -> "unknown"
+          end)
+
+        Executor.node_satisfies?(node_name, req_strings)
       end)
-      
-      Executor.node_satisfies?(node_name, req_strings)
-    end)
 
     IO.puts("Mesh: Routing Baton #{baton.id} [Requirements: #{inspect(baton.required_cap)}]")
     IO.puts("Mesh: Valid targets found: #{inspect(valid_targets)}")
-    
+
     if valid_targets != [] do
       target = Enum.random(valid_targets)
       IO.puts("Mesh: Routing to verified node: #{inspect(target)}")
@@ -98,26 +109,46 @@ defmodule Bag.Mesh do
   @impl true
   def handle_call({:submit_check, check_id, command, opts}, _from, state) do
     required_cap = Keyword.get(opts, :required_cap, "linux")
+    artifact_path = Keyword.get(opts, :artifact_path)
+    workdir = Keyword.get(opts, :workdir)
 
     freeze_path =
       Keyword.get(opts, :freeze_path, Path.join(System.tmp_dir!(), "#{check_id}.baton"))
 
     # Select a capable node from the mirrored estate manifest.
     capable =
-      Executor.list_nodes()
-      |> Enum.filter(fn node -> Executor.node_satisfies?(node, [required_cap]) end)
+      Executor.node_costs()
+      |> Enum.filter(fn {node, _cost} -> Executor.node_satisfies?(node, [required_cap]) end)
+      |> Enum.sort_by(fn {node, cost} -> {cost, node} end)
 
     case capable do
       [] ->
         # Operational logs go to stderr — stdout is reserved for machine output.
-        IO.puts(:stderr, "Mesh: NO node satisfies '#{required_cap}' for check #{check_id}. Suspended.")
+        IO.puts(
+          :stderr,
+          "Mesh: NO node satisfies '#{required_cap}' for check #{check_id}. Suspended."
+        )
+
         {:reply, {:suspended, nil, nil}, state}
 
-      [node | _] ->
-        baton = CiBaton.new(check_id, command, node: node, required_cap: required_cap)
+      [{node, _cost} | _] ->
+        baton =
+          CiBaton.new(check_id, command,
+            node: node,
+            required_cap: required_cap,
+            freeze_path: freeze_path,
+            workdir: workdir,
+            artifact_path: artifact_path
+          )
+
         IO.puts(:stderr, "Mesh: routing check #{check_id} → #{node} (cap: #{required_cap})")
         {verdict, updated, _output} = Executor.run_check(baton, freeze_path)
-        IO.puts(:stderr, "Mesh: check #{check_id} verdict=#{verdict} on #{node} (0 GitHub minutes)")
+
+        IO.puts(
+          :stderr,
+          "Mesh: check #{check_id} verdict=#{verdict} on #{node} (0 GitHub minutes)"
+        )
+
         {:reply, {verdict, node, updated}, state}
     end
   end
@@ -127,16 +158,19 @@ defmodule Bag.Mesh do
     case Planner.plan(spec, budget) do
       {:ok, node, cost} ->
         IO.puts(:stderr, "Mesh: planned #{spec.check_id} → #{node} (money cost #{cost})")
+        freeze_path = Path.join(System.tmp_dir!(), "#{spec.check_id}.baton")
 
         baton =
           CiBaton.new(spec.check_id, spec.command,
             node: node,
             required_cap: spec.required_cap,
             mutating: Map.get(spec, :mutating, false),
-            risk: Map.get(spec, :risk, :low)
+            risk: Map.get(spec, :risk, :low),
+            freeze_path: freeze_path,
+            workdir: Map.get(spec, :workdir),
+            artifact_path: Map.get(spec, :artifact_path)
           )
 
-        freeze_path = Path.join(System.tmp_dir!(), "#{spec.check_id}.baton")
         {verdict, updated, _output} = Executor.run_check(baton, freeze_path)
         # Relegated = ran on an owned node, not GitHub's required-check route.
         relegated = node != "mesh-github-runner"
@@ -156,17 +190,17 @@ defmodule Bag.Mesh do
   @impl true
   def handle_cast({:process, baton}, state) do
     IO.puts("Mesh [#{Node.self()}]: Claimed Baton #{baton.id} with count #{baton.counter}")
-    
+
     case Executor.execute(baton) do
       {:ok, updated_baton, output} ->
         IO.puts("Mesh [#{Node.self()}]: Execution complete. Output: #{String.trim(output)}")
-        
+
         # Decide whether to continue or complete
         if updated_baton.counter < 10 do
           IO.puts("Mesh [#{Node.self()}]: Baton not finished. Passing to next step...")
           # Simulate a delay
           Process.sleep(1000)
-          
+
           # Handoff: pick a random node in the cluster
           route_baton(%{updated_baton | id: baton.id})
         else

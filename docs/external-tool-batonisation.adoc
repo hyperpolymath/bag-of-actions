@@ -1,0 +1,247 @@
+// SPDX-License-Identifier: CC-BY-SA-4.0
+// Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
+= External-tool Batonisation
+:toc: preamble
+:icons: font
+
+External CI/security tools should not be reimplemented merely because they are
+currently consumed through a GitHub Actions wrapper.
+
+Before deciding to reimplement, classify the tool — then apply the appropriate
+Batonisation pattern.
+
+== Classification
+
+[cols="1,3,2"]
+|===
+| Class | Characteristics | Approach
+
+| *Batonisable executable*
+| Has a CLI, container image, or stable binary. Returns a process exit code and/or
+  machine-readable report. Can run on owned compute with explicit capabilities.
+  The Actions wrapper is orchestration/publishing sugar around the real executable.
+| Run as a CI-check Baton. Freeze verdict + report digest.
+
+| *Split-boundary tool*
+| Has a pure local analysis part and a GitHub/cloud-native publication part.
+  Example: OSSF Scorecard (local scan vs. OSSF API upload + badge + SARIF upload).
+| Batonise the scan/report generation. Keep a minimal bridge _only_ if
+  GitHub-native publication is actually required.
+
+| *Native Baton candidate*
+| No usable executable or API boundary. Semantics are small, strategic, or require
+  proof-carrying native behaviour.
+| Implement as a native Baton with proofs/tests. Do not wrap a reimplementation.
+
+| *Not Batonisable yet*
+| Requires interactive browser/session state, non-reproducible SaaS-only execution,
+  unstable outputs, or hidden side effects.
+| Write an adapter/proxy first, or keep it outside the Baton trust path.
+|===
+
+== Rules
+
+. *Prefer wrapping a stable CLI/container/API over reimplementing semantics.*
+  The Actions wrapper is not the tool — find the underlying executable.
+
+. *Freeze the verdict, command, version, relevant inputs, and report digest.*
+  The Baton envelope is the tamper-evident record; the exit code alone is not.
+
+. *Separate execution from publication.*
+  Running the tool on owned compute and uploading results to an external API are
+  independent concerns. Do not conflate them in the Baton.
+
+. *Keep cloud/GitHub-native identity bridges thin and explicit.*
+  OIDC tokens, SARIF uploads, and badge updates stay outside the Baton envelope;
+  reference them in docs, not in the verdict logic.
+
+. *Add capabilities for actual execution requirements, not brand names.*
+  `scorecard` means "this node can run the Scorecard CLI or container". Prefer
+  operational names over product names where possible (e.g. `container` for any
+  Docker-capable node).
+
+. *Fail closed on unknown capabilities.*
+  An unknown/unprovable capability string in `Capability.fromString` returns `null`
+  and the `match` subcommand exits 1. No fallback to `linux` or any default.
+
+. *Prefer pinned versions for trust-sensitive scans.*
+  Record the tool version in the frozen Baton `command` field (e.g.
+  `scorecard --repo=... --show-details`) or in a companion version file attested
+  alongside the report.
+
+. *Attest results before migration/thaw.*
+  The HMAC-SHA256 digest covers the verdict fields and, when present, the report's
+  SHA-256. Thawing without a valid attestation exits 3 (tampered).
+
+. *Do not hide external nondeterminism; record it.*
+  Tools like Scorecard query live databases. Record the scan timestamp, tool
+  version, and ruleset/DB version in the report or in companion metadata so the
+  Baton can be understood in isolation.
+
+. *Only reimplement when semantics are small, strategic, unavailable as an
+   executable, or require proof-carrying native behaviour.*
+   If a reimplementation would be equivalent to the upstream tool, don't.
+
+== Worked example: OSSF Scorecard
+
+=== Why Scorecard is a split-boundary tool
+
+OSSF Scorecard has two distinct phases:
+
+* *Local scan* — the `scorecard` CLI (or `ghcr.io/ossf/scorecard:latest` container)
+  queries the repository, runs checks, and writes a JSON or SARIF report to disk.
+  This phase runs entirely on owned compute with a read-only GitHub token.
+
+* *Cloud publication* — `publish_results: true` uploads the result to the OSSF API
+  (feeds the badge); a separate SARIF upload step populates the GitHub Security tab.
+  These use GitHub OIDC identity and are inherently cloud-native.
+
+The official `ossf/scorecard-action` wrapper orchestrates both phases in a single
+Actions step. The Baton wraps only the first phase; the second remains a thin bridge.
+
+=== Scorecard capability
+
+`scorecard` was added to the capability taxonomy (tag 11) alongside `zig`, `rust`,
+`cargo`, and `deno`. It is currently assigned to `mesh-server-1`.
+
+The three-layer sync rule applies:
+
+[source]
+----
+verification/proofs/Bag/Protocol.idr  →  | Scorecard   (capToTag = 11)
+src/estate.zig                         →  scorecard = 11
+bag/lib/bag/mesh.ex                    →  :scorecard -> "scorecard"
+----
+
+=== Manifest
+
+`ci-checks.security.exs` contains the Scorecard check:
+
+[source,elixir]
+----
+%{
+  check_id: "ossf-scorecard",
+  command: ["./scripts/baton-scorecard.sh", "github.com/hyperpolymath/bag-of-actions"],
+  required_cap: "scorecard",
+  artifact_path: "_bag_artifacts/scorecard/scorecard.json"
+}
+----
+
+Run it:
+
+[source,sh]
+----
+GITHUB_AUTH_TOKEN=<read-only-pat> cd bag && mix bag.sweep ../ci-checks.security.exs
+----
+
+=== Wrapper script
+
+`scripts/baton-scorecard.sh` is the stable interface between the Baton system and
+the Scorecard CLI. It:
+
+* Ensures `_bag_artifacts/scorecard/` exists.
+* Runs `scorecard --repo=... --format=json --show-details`.
+* Writes output to `_bag_artifacts/scorecard/scorecard.json`.
+* Returns Scorecard's exit code unmodified (no invented thresholds by default).
+* Optionally gates on `BAG_SCORECARD_MIN_SCORE` (0–10).
+
+Container alternative (when `scorecard` binary is not installed):
+
+[source,sh]
+----
+docker run --rm \
+  -e GITHUB_AUTH_TOKEN \
+  ghcr.io/ossf/scorecard:latest \
+  --repo=github.com/hyperpolymath/bag-of-actions \
+  --format=json \
+  --show-details \
+  > _bag_artifacts/scorecard/scorecard.json
+----
+
+Add a `container` capability to a node and update the manifest `command` if using
+this route.
+
+=== Artifact attestation
+
+The Zig `check` subcommand reads `BAG_ARTIFACT_PATH` (set by the Elixir executor
+when the manifest entry carries `artifact_path`). After the check runs, it computes
+a SHA-256 of the report file and includes the hex digest in the frozen Baton
+envelope:
+
+[source]
+----
+BAG-CHECK-BATON v1
+...
+digest=hmac-sha256:<hmac over verdict fields + artifact_sha256>
+artifact_path=_bag_artifacts/scorecard/scorecard.json
+artifact_sha256=<hex-sha256 of scorecard.json>
+----
+
+The HMAC covers both the verdict and the artifact digest, so tampering with either
+is rejected on thaw. Old Batons without `artifact_sha256` verify with the original
+canonical string (backward compatible).
+
+=== What this Baton does NOT replace
+
+[cols="1,2"]
+|===
+| Concern | Remains a GitHub/OSSF-native bridge
+
+| `publish_results: true`
+| OSSF API upload (feeds badge). Requires GitHub OIDC identity. Not in Baton.
+
+| GitHub Security tab
+| SARIF upload via `github/codeql-action/upload-sarif`. Not in Baton.
+
+| OSSF badge
+| Populated by the OSSF API from `publish_results`. Not in Baton.
+|===
+
+== Future candidates
+
+[cols="1,2,1"]
+|===
+| Tool | Batonisation approach | Capability
+
+| CodeQL CLI
+| `codeql database analyze --format=sarif-latest` → SARIF Baton
+| `codeql`
+
+| Trivy / Grype
+| `trivy image --format json` → vulnerability Baton
+| `container`
+
+| Syft
+| `syft ... --output cyclonedx-json` → SBOM Baton
+| `container`
+
+| cargo-audit / cargo-deny
+| `cargo audit --json` → Rust security-policy Baton
+| `cargo`
+
+| semgrep
+| `semgrep --config auto --json` → ruleset-bound SARIF Baton
+| `semgrep`
+
+| cosign / slsa-verifier
+| `cosign verify ...` → provenance verification Baton
+| `trusted_host`
+|===
+
+For each: find the CLI boundary, add the capability, write a thin wrapper script,
+add the manifest entry, and let the existing freeze/thaw/attest pipeline handle
+the rest.
+
+== Artifact-bearing CheckBaton v2 (TODO)
+
+The current artifact support (v1) hashes the artifact file and binds the digest
+to the Baton attestation. Planned enhancements:
+
+* *Inline small artifacts* — for reports below a size threshold, embed them
+  directly in the Baton envelope (base64) to avoid a separate file.
+* *SARIF → structured Baton* — parse the SARIF `results` array and surface
+  findings as typed `ActionResult` residue, not just a file digest.
+* *Version pinning* — record tool version and ruleset/DB version in the envelope
+  so the Baton is reproducible evidence, not just a point-in-time snapshot.
+* *Multi-artifact* — support multiple artifact paths in a single Baton (e.g.,
+  JSON + SARIF + SBOM from a single scan run).

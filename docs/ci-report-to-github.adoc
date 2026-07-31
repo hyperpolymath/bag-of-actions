@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: CC-BY-SA-4.0
+// Copyright (c) Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
+= Reporting Baton verdicts back to GitHub — the owned-compute CI bridge
+:toc: preamble
+:icons: font
+
+`docs/ci-check-baton.adoc` shows how a CI check *runs* on owned compute with zero
+GitHub Actions minutes and freezes an attested verdict. This doc closes the last
+loop it names ("Publication ... remains a separate cloud-native bridge"): getting
+that verdict back onto a GitHub PR so a **required status check** is satisfied
+*without* a GitHub-hosted runner.
+
+== The pieces (all built + tested)
+
+[cols="1,3"]
+|===
+| `Bag.GitHubBridge` | Posts a verdict as a GitHub **commit status** (`POST /repos/{repo}/statuses/{sha}`) via the `gh` CLI. *Status, not check-run:* the Checks API needs a GitHub **App** token; a PAT (what `gh` carries) can write a status, and a status equally satisfies a branch-protection required context (matched by the `context` string). Dependency-free. Discharges `Bag.ActionResult`'s `{:owes, :github_required_check}`.
+| `mix bag.report`   | The dispatcher: runs a `Bag.CiSweep` from a manifest on a capability-matched owned node, thaws and verifies each signed envelope, then `GitHubBridge.report_sweep`s each verdict to the commit named by `GITHUB_REPOSITORY` + `GITHUB_SHA`. Exit 0 iff all passed *and* all posted.
+| `guix` capability  | Present across all three layers (`Protocol.idr` / `estate.zig` / `mesh.ex`); `mesh-server-1` carries it, so a `guix shell …` check routes there. (Guix is the estate-sanctioned package manager; a duplicate `nix` capability added 2026-06-14 was removed 2026-06-24 under the Nix ban.)
+| manifest           | The target repo ships `ci-checks.exs`; each check carries `required_cap`, an optional absolute `workdir`, and an optional `github_context` (the required-check name its verdict posts to). Worked example: `hyperpolymath/snifs` `ci-checks.exs` (the proof gate + ABI conformance).
+|===
+
+== Run it (on the node)
+
+[source,sh]
+----
+# On a guix-capable owned node, with the target repo checked out at the PR head:
+cd /path/to/bag-of-actions/bag
+GITHUB_REPOSITORY=hyperpolymath/snifs GITHUB_SHA=<pr-head-sha> \
+  mix bag.report /path/to/snifs/ci-checks.exs
+# -> runs `just proof-check-all` + `just abi-conformance` on owned compute,
+#    posts two commit statuses, exits 0/1.  Zero GitHub Actions minutes.
+----
+
+== Wiring the trigger — two options
+
+The execution + report-back is done; what remains is *what kicks it off when a PR
+opens*. Pick by how much GHA you'll tolerate:
+
+*Option A — thin GHA dispatcher (~seconds of minutes, simplest).* A tiny workflow
+whose only job is to hand off to the owned node; the heavy ~20-minute run happens
+off-GHA:
+
+[source,yaml]
+----
+# .github/workflows/proofs-owned.yml (sketch — needs an SSH deploy secret)
+name: Proofs (owned compute)
+on: { pull_request: { branches: [main] } }
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest          # only a few seconds: it just SSHes out
+    steps:
+      - name: Run the gate on owned compute + report back
+        env: { SSH_KEY: ${{ secrets.BAG_NODE_SSH_KEY }} }
+        run: |
+          ssh bag@mesh-server-1 \
+            "cd ~/snifs && git fetch origin && git checkout ${{ github.event.pull_request.head.sha }} \
+             && cd ~/bag-of-actions/bag \
+             && GITHUB_REPOSITORY=${{ github.repository }} \
+                GITHUB_SHA=${{ github.event.pull_request.head.sha }} \
+                mix bag.report ~/snifs/ci-checks.exs"
+----
+
+*Option B — owned webhook (zero GHA minutes, more to stand up).* A small receiver
+on owned compute subscribed to the repo's `pull_request` webhook that runs
+`mix bag.report` directly. No GHA workflow at all. This is the full
+"dissolve the billing wall" end state; it needs a reachable HTTP endpoint + the
+webhook secret.
+
+== Branch protection
+
+Point the required contexts at the bag-posted statuses:
+
+* Add `bag / Formal proofs (owned compute)` and `bag / ABI conformance (owned compute)`
+  to `main`'s required status checks.
+* Retire the GitHub-hosted `Formal proofs — Idris2 + Lean4` / `ABI conformance — interface drift gate`
+  required contexts once the owned route is trusted (keep them advisory during cut-over).
+
+== Status / gaps
+
+Built + tested (in `bag`): the fail-closed `Bag.GitHubBridge`, the
+`mix bag.report` context mapping, signed sweep-to-green reporting, explicit
+target-repository working directories, and cost-aware owned-node routing.
+The verdict chain is trustworthy end-to-end: each sweep result retains its envelope path,
+thaws the signed envelope before reporting, and carries the parsed production
+attestation to the fail-closed GitHub bridge. A real failing check freezes `verdict=fail`
+(`exit_code=1`) and posts a non-green status; tamper of a frozen verdict is rejected
+by HMAC + ed25519.
+
+The complete dogfood suite additionally requires a source-compatible Zig
+toolchain and `wasmtime` for its WASI check. These runtime dependencies must be
+pinned and provisioned on owned nodes before the dogfood manifest is a
+reproducible release gate.
+
+*Trigger — Option A is now committed* at `.github/workflows/owned-ci.yml`: a thin GHA
+dispatcher (seconds of minutes) that SSHes to the owned node and runs the dogfood
+manifest there. It is a **clean no-op until** the owner sets repo variable
+`BAG_NODE_HOST` + secret `BAG_NODE_SSH_KEY`, so merging it changes nothing.
+
+*Not* done (genuine infra, owner-provisioned): a reachable `guix`-capable node with
+the toolchain + repo checkout; the `BAG_NODE_HOST`/`BAG_NODE_SSH_KEY` values; the
+branch-protection cut-over (point required contexts at the `bag/<check_id>` statuses);
+and — if you want the zero-GHA end state — Option B, an owned webhook receiver (kept
+out of `bag` so far to preserve its dependency-free posture; needs a deps decision).
+Until a node is wired, this runs on demand from the CLI.

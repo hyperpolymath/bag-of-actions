@@ -19,6 +19,9 @@ defmodule Bag.CiBaton do
     :command,
     :verdict,
     :exit_code,
+    :freeze_path,
+    :workdir,
+    artifact_path: nil,
     mutating: false,
     risk: :low
   ]
@@ -32,7 +35,10 @@ defmodule Bag.CiBaton do
           required_cap: String.t(),
           command: [String.t()],
           verdict: verdict(),
-          exit_code: integer() | nil
+          exit_code: integer() | nil,
+          freeze_path: String.t() | nil,
+          workdir: String.t() | nil,
+          artifact_path: String.t() | nil
         }
 
   @doc """
@@ -40,7 +46,9 @@ defmodule Bag.CiBaton do
 
   `check_id` names the check (e.g. "zig-fmt"); `command` is the argv list to run
   (e.g. `["zig", "fmt", "--check", "build.zig"]`). Options: `:node` (default
-  "mesh-server-1") and `:required_cap` (default "linux").
+  "mesh-server-1"), `:required_cap` (default "linux"), `:freeze_path` (the
+  attested result envelope), and `:workdir` (an absolute target repository
+  directory; defaults to the Bag repository root).
   """
   def new(check_id, command, opts \\ []) when is_binary(check_id) and is_list(command) do
     %__MODULE__{
@@ -51,6 +59,9 @@ defmodule Bag.CiBaton do
       command: command,
       verdict: :pending,
       exit_code: nil,
+      freeze_path: Keyword.get(opts, :freeze_path),
+      workdir: Keyword.get(opts, :workdir),
+      artifact_path: Keyword.get(opts, :artifact_path),
       mutating: Keyword.get(opts, :mutating, false),
       risk: Keyword.get(opts, :risk, :low)
     }

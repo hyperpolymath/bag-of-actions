@@ -8,6 +8,8 @@ module Bag.Protocol
 ||| Core hardware, identity, and toolchain capabilities.
 ||| Toolchain capabilities (Zig/Rust/Cargo/Deno) let a CI-check Baton be routed
 ||| only to a node that actually has the toolchain the check needs.
+||| External-tool capabilities (Scorecard) indicate that a node has the runtime
+||| required to execute an external security/analysis tool as a Baton payload.
 public export
 data Capability
   = Linux
@@ -20,6 +22,10 @@ data Capability
   | Rust
   | Cargo
   | Deno
+  | Scorecard
+  | Wasm
+  | Idris2
+  | Just
 
 public export
 Eq Capability where
@@ -33,6 +39,10 @@ Eq Capability where
   Rust == Rust = True
   Cargo == Cargo = True
   Deno == Deno = True
+  Scorecard == Scorecard = True
+  Wasm == Wasm = True
+  Idris2 == Idris2 = True
+  Just == Just = True
   _ == _ = False
 
 ||| Check if a node's provided capabilities satisfy the Baton's requirements.
@@ -57,3 +67,7 @@ capToTag Zig              = 7
 capToTag Rust             = 8
 capToTag Cargo            = 9
 capToTag Deno             = 10
+capToTag Scorecard        = 11
+capToTag Wasm             = 12
+capToTag Idris2           = 13
+capToTag Just             = 14

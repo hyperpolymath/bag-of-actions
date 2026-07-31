@@ -144,15 +144,30 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
-    // Just like flags, top level steps are also listed in the `--help` menu.
-    //
-    // The Zig build system is entirely implemented in userland, which means
-    // that it cannot hook into private compiler APIs. All compilation work
-    // orchestrated by the build system will result in other Zig compiler
-    // subcommands being invoked with the right flags defined. You can observe
-    // these invocations when one fails (or you pass a flag to increase
-    // verbosity) to validate assumptions and diagnose problems.
-    //
-    // Lastly, the Zig build system is relatively simple and self-contained,
-    // and reading its source code will allow you to master it.
+    // WASI check modules: compile self-contained CI checks to wasm32-wasi so they
+    // can be frozen as Wasm Batons and executed via `wasmtime run --dir=. <module>`.
+    // Run with: `zig build wasm`
+    const wasi_target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .wasi,
+    });
+    const zig_fmt_wasm = b.addExecutable(.{
+        .name = "zig_fmt",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/checks/zig_fmt.zig"),
+            .target = wasi_target,
+            .optimize = .ReleaseSmall,
+        }),
+    });
+    const install_wasm = b.addInstallArtifact(zig_fmt_wasm, .{
+        .dest_dir = .{ .override = .{ .custom = "lib" } },
+    });
+    const wasm_step = b.step("wasm", "Build WASI check modules to zig-out/lib/");
+    wasm_step.dependOn(&install_wasm.step);
+    // Also install the WASI check modules on the DEFAULT build so the dogfood
+    // manifest's `wasm://zig-out/lib/zig_fmt.wasm` check is runnable from a plain
+    // `zig build`. Previously the module only landed in zig-out/lib/ after an
+    // explicit `zig build wasm`, so a fresh build left the dogfood check unable
+    // to find it (verdict=fail, not because the source was dirty).
+    b.getInstallStep().dependOn(&install_wasm.step);
 }
