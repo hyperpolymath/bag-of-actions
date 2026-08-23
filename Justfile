@@ -502,7 +502,7 @@ state-phase:
     @grep -oP 'phase\s*=\s*"\K[^"]+' .machine_readable/STATE.a2ml 2>/dev/null | head -1 || echo "unknown"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# GUIX  (Guix is the sole estate package manager — Nix is banned)
+# GUIX  (Guix is the sole estate package manager — Guix is banned)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Enter the Guix development shell.

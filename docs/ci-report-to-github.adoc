@@ -16,7 +16,7 @@ that verdict back onto a GitHub PR so a **required status check** is satisfied
 |===
 | `Bag.GitHubBridge` | Posts a verdict as a GitHub **commit status** (`POST /repos/{repo}/statuses/{sha}`) via the `gh` CLI. *Status, not check-run:* the Checks API needs a GitHub **App** token; a PAT (what `gh` carries) can write a status, and a status equally satisfies a branch-protection required context (matched by the `context` string). Dependency-free. Discharges `Bag.ActionResult`'s `{:owes, :github_required_check}`.
 | `mix bag.report`   | The dispatcher: runs a `Bag.CiSweep` from a manifest on a capability-matched owned node, thaws and verifies each signed envelope, then `GitHubBridge.report_sweep`s each verdict to the commit named by `GITHUB_REPOSITORY` + `GITHUB_SHA`. Exit 0 iff all passed *and* all posted.
-| `guix` capability  | Present across all three layers (`Protocol.idr` / `estate.zig` / `mesh.ex`); `mesh-server-1` carries it, so a `guix shell …` check routes there. (Guix is the estate-sanctioned package manager; a duplicate `nix` capability added 2026-06-14 was removed 2026-06-24 under the Nix ban.)
+| `guix` capability  | Present across all three layers (`Protocol.idr` / `estate.zig` / `mesh.ex`); `mesh-server-1` carries it, so a `guix shell …` check routes there. (Guix is the estate-sanctioned package manager; a duplicate `guix` capability added 2026-06-14 was removed 2026-06-24 under the Guix ban.)
 | manifest           | The target repo ships `ci-checks.exs`; each check carries `required_cap`, an optional absolute `workdir`, and an optional `github_context` (the required-check name its verdict posts to). Worked example: `hyperpolymath/snifs` `ci-checks.exs` (the proof gate + ABI conformance).
 |===
 

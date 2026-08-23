@@ -253,8 +253,8 @@ case into a pass. The negative fixture is now *generated* inside
 
 [NOTE]
 ====
-**Duplicate `nix` capability**: a `nix` capability added 2026-06-14 was removed
-2026-06-24 under the estate-wide Nix ban. Guix is the sole estate package
+**Duplicate `guix` capability**: a `guix` capability added 2026-06-14 was removed
+2026-06-24 under the estate-wide Guix ban. Guix is the sole estate package
 manager; the `guix` capability is present across `Protocol.idr`,
 `src/estate.zig`, and `mesh.ex` (see link:docs/ci-report-to-github.adoc[]).
 ====
